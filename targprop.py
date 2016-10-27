@@ -1,11 +1,11 @@
 import os
 import sys
+import pdb
 import numpy as np
-sys.path.insert(0, '/Users/jeff/Documents/Python/_projects/tdadl/')
 from toy_data import *
 
-def square_axes(i=0):
-  ''' make axis look nice '''
+def square_axes(fig, i=0):
+  ''' make axis look nice. useful for notebook visualizations '''
   fig.axes[i].axhline(0, color='w', linewidth=3.5, alpha=0.25)
   fig.axes[i].axvline(0, color='w', linewidth=3.5, alpha=0.25)
   fig.axes[i].set_xlim(-1.5,1.5)
@@ -14,148 +14,208 @@ def square_axes(i=0):
   fig.axes[i].get_xaxis().set_ticklabels([])
   fig.axes[i].get_yaxis().set_ticklabels([])
 
+# sigmoid ops
 def sigmoid(x):
   return 1. / (1. + np.exp(-x))
-def sigmoid_inv(x, th = 0.001):
-  x = x * (x > th)
-  x = x * (x < (1-th))
-  x = x + th*(x <= th)
-  x = x + (1-th)*(x >= (1-th))
+def sigmoid_inv(x, th=1e-2):
+  ''' inverse of sigmoid(). input to sigmoid_inv is clipped first
+      to lie within the image of sigmoid() '''
+  x = np.piecewise(x, [x <= th, x > th, x >= (1-th)], [th, lambda x_: x_, 1-th])
   return -np.log(1./x - 1.)
 def dsigmoid(x):
+  ''' derivative of sigmoid() '''
   return sigmoid(x)*(1.0 - sigmoid(x))
 
+# tanh ops
 def tanh(x):
   return (np.exp(x) - np.exp(-x))/(np.exp(x) + np.exp(-x))
-def tanh_inv(x, th = 0.001):
-  x = x * (x > (-1+th))
-  x = x * (x < (1-th))
-  x = x + (-1+th)*(x <= (-1+th))
-  x = x + (1-th)*(x >= (1-th))
-  return -0.5*np.log((1. + x)/(1. - x))
+def tanh_inv(x, th=1e-2):
+  ''' inverse of tanh(). input to tanh_inv is clipped first
+      to lie within the image of tanh() '''
+  x = np.piecewise(x, [x <= (-1+th), x > (-1+th), x >= (1-th)], [-1+th, lambda x_: x_, 1-th])
+  return 0.5*np.log((1. + x)/(1. - x))
 def dtanh(x):
+  ''' derivative of tanh() '''
   return 1. - tanh(x)**2
 
+# relu ops
 def relu(x):
   return x*(x>0)
 def drelu(x):
   return (x>0).astype('float')
 
-# d_op for multiinputs...
+# Matrix multiplication ops
 def matmul(x, W):
   return np.dot(x, W)
 def matmul_inv(x, W):
   return np.dot(x, np.linalg.inv(W))
-def matmul_pinv(x, W, rcond = 1e-1):
+def matmul_pinv(x, W, rcond = 1e-2):
   return np.dot(x, np.linalg.pinv(W, rcond=rcond))
 
+# Add/subtract ops (being overly explicit)
 def add(x, b):
   return x + b
 def add_inv(x, b):
   return x - b
 
+# Loss-related ops
 def softmax(x):
-  return np.exp(x)/np.sum(np.exp(x),axis=1,keepdims=True)
+  return np.exp(x)/np.sum(np.exp(x), axis=1, keepdims=True)
 def cross_entropy(y, x):
   return np.sum(-y*np.log(softmax(x)), axis=1, keepdims=True).mean()
 
-def run_tprop():
+def run_tprop(batch_size=100,
+              t_steps=200,
+              layers=3,
+              alpha=0.003,
+              alpha_t=0.1,
+              SGD=True,
+              pinv_rcond=1e-2,
+              nonlin_thresh=1e-3,
+              nonlinearity='tanh'):
+  '''
+    main function
+  '''
   data = mnist_data()
+  data_test = mnist_data_test()
 
-  batch_size = 1000
-
-  ## Model parameters
+  # Model parameters
   m_dim = data.inputs.shape[1]
   p_dim = data.outputs.shape[1]
 
-  t_steps = 500
-  algs = 2
-  training_algs = 2
-  layers = 3
-  l_dim = [m_dim] + (layers-1)*[240] + [p_dim]
-  alpha = 0.003
-  alpha_t = 0.01
+  algs = 2 # there are two error prop algs: backprop and tprop
+  training_algs = 2 # there are two weight update algs: gradient descent and p_inv
+  l_dim = [m_dim] + (layers-1)*[240] + [p_dim] # dimensions of each layer stored as a list
 
   # Forward weights
-  W  = np.zeros((algs, layers+1), dtype=object)
-  dW = np.zeros((algs, layers+1), dtype=object)
+  W  = np.zeros((algs, training_algs, layers+1), dtype=object)
+  dW = np.zeros((algs, training_algs, layers+1), dtype=object)
   # Biases
-  b  = np.zeros((algs, layers+1), dtype=object)
-  db = np.zeros((algs, layers+1), dtype=object)
-  L = np.zeros((algs, t_steps+1))
-  accuracy = np.zeros((algs, t_steps+1))
+  b  = np.zeros((algs, training_algs, layers+1), dtype=object)
+  db = np.zeros((algs, training_algs, layers+1), dtype=object)
+  # Loss
+  L = np.zeros((algs, training_algs, t_steps+1))
+  accuracy = np.zeros((algs, training_algs, t_steps+1))
+  # Loss for test data
+  L_test = np.zeros((algs, training_algs))
+  accuracy_test = np.zeros((algs, training_algs))
 
   # Initialize
   for k in range(algs):
-    for l in range(1, layers+1):
-      W[k, l] = np.random.randn(l_dim[l-1], l_dim[l])/np.sqrt(l_dim[l-1])
-      b[k, l] = 0*np.ones((1, l_dim[l]))
+    for j in range(training_algs):
+      for l in range(1, layers+1):
+        np.random.seed(l) # different random seed for each layer. Otherwise, same.
+        W[k, j, l] = np.random.randn(l_dim[l-1], l_dim[l])/np.sqrt(l_dim[l-1])
+        b[k, j, l] = 0*np.ones((1, l_dim[l]))
 
   # Activations
-  x_1 = np.zeros((algs, layers+1), dtype=object)
-  x_2 = np.zeros((algs, layers+1), dtype=object)
-  x_3 = np.zeros((algs, layers+1), dtype=object)
+  x_1 = np.zeros((algs, training_algs, layers+1), dtype=object) # x_1 = W*x_3
+  x_2 = np.zeros((algs, training_algs, layers+1), dtype=object) # x_2 = x_1 + b
+  x_3 = np.zeros((algs, training_algs, layers+1), dtype=object) # x_3 = f(x_2)
+
+  # Test Activations
+  x_1_test = np.zeros((algs, training_algs, layers+1), dtype=object)
+  x_2_test = np.zeros((algs, training_algs, layers+1), dtype=object)
+  x_3_test = np.zeros((algs, training_algs, layers+1), dtype=object)
 
   # Errors
-  dx_3 = np.zeros((algs, layers+1), dtype=object)
-  dx_2 = np.zeros((algs, layers+1), dtype=object)
-  dx_1 = np.zeros((algs, layers+1), dtype=object)
+  dx_3 = np.zeros((algs, training_algs, layers+1), dtype=object)
+  dx_2 = np.zeros((algs, training_algs, layers+1), dtype=object)
+  dx_1 = np.zeros((algs, training_algs, layers+1), dtype=object)
 
   # Targets
-  tx_3 = np.zeros((algs, layers+1), dtype=object)
-  tx_2 = np.zeros((algs, layers+1), dtype=object)
-  tx_1 = np.zeros((algs, layers+1), dtype=object)
+  tx_3 = np.zeros((algs, training_algs, layers+1), dtype=object)
+  tx_2 = np.zeros((algs, training_algs, layers+1), dtype=object)
+  tx_1 = np.zeros((algs, training_algs, layers+1), dtype=object)
 
   # Training
   for t in range(t_steps+1):
-    if t % 100 == 0:
+
+    # print progress
+    if t % 10 == 0:
       print t
+
     # Get data
-    x0, y = data.rand_batch(batch_size)
-    #x0 = data.inputs[:batch_size]
-    #y = data.outputs[:batch_size]
+    if SGD:
+      x0, y = data.next_batch(batch_size)
+    else:
+      x0 = data.inputs[:batch_size]
+      y = data.outputs[:batch_size]
+
+    # iterate through algs and training_algs
     for k in range(algs):
-      # Forward pass
-      x_3[k, 0] = x0
-      for l in range(1, layers+1):
-        x_1[k, l] = matmul(x_3[k, l-1], W[k, l])
-        x_2[k, l] = add(x_1[k, l], b[k, l])
-        x_3[k, l] = tanh(x_2[k, l])
+      for j in range(training_algs):
 
-      # Backward pass
-      dx_3[k, -1] = x_3[k, -1] - y # true for both MSE and cross-entropy softmax (?)
-      tx_3[k, -1] = x_3[k, -1] - alpha_t*(x_3[k, -1] - y)
-      for l in range(layers, 0, -1):
-        # TODO: separate targ_algs and training_algs (training_algs / gd or pinv)
-        if k == 0:
+        # Forward pass
+        x_3[k, j, 0] = x0
+        for l in range(1, layers+1):
+          x_1[k, j, l] = matmul(x_3[k, j, l-1], W[k, j, l])
+          x_2[k, j, l] = add(x_1[k, j, l], b[k, j, l])
+          x_3[k, j, l] = tanh(x_2[k, j, l])
+        L[k, j, t] = cross_entropy(y, x_3[k, j, -1])
+        correct_prediction = np.equal(np.argmax(softmax(x_3[k, j, -1]), axis=1), np.argmax(y, axis=1))
+        accuracy[k, j, t] = np.mean(correct_prediction.astype('float'))
+
+        # Backward pass
+        # Top layer errors and targets
+        dx_3[k, j, -1] = x_3[k, j, -1] - y # applies to both MSE and cross-entropy softmax
+        tx_3[k, j, -1] = x_3[k, j, -1] - alpha_t*(x_3[k, j, -1] - y) # top layer target
+        for l in range(layers, 0, -1):
+          
           # Backprop
-          dx_2[k, l]   = dtanh(x_2[k, l]) * dx_3[k, l]
-          dx_1[k, l]   = dx_2[k, l]
-          dx_3[k, l-1] = matmul(dx_1[k, l], W[k, l].T)
-        elif k == 1:
-          # Target prop using inverses
-          tx_2[k, l]   = x_2[k, l] + tanh_inv(tx_3[k, l]) - tanh_inv(x_3[k, l])
-          tx_1[k, l]   = x_1[k, l] + add_inv(tx_2[k, l], b[k, l]) - add_inv(x_2[k, l], b[k, l])
-          tx_3[k, l-1] = x_3[k, l-1] + matmul_pinv(tx_1[k, l], W[k, l]) - matmul_pinv(x_1[k, l], W[k, l])
+          if k == 0:
+            # Backprop (errors / derivatives)
+            dx_2[k, j, l]   = dtanh(x_2[k, j, l]) * dx_3[k, j, l]
+            dx_1[k, j, l]   = dx_2[k, j, l]
+            dx_3[k, j, l-1] = matmul(dx_1[k, j, l], W[k, j, l].T)
 
-      # Update parameters
+            # Backprop 'targets'
+            tx_2[k, j, l] = x_2[k, j, l] - alpha_t*dx_2[k, j, l]
+            tx_1[k, j, l] = x_1[k, j, l] - alpha_t*dx_1[k, j, l]
+            tx_3[k, j, l] = x_3[k, j, l] - alpha_t*dx_3[k, j, l]
+
+          # Target prop
+          elif k == 1:
+            # Target prop targets
+            tx_2[k, j, l]   = x_2[k, j, l] + tanh_inv(tx_3[k, j, l], th=nonlin_thresh) - tanh_inv(x_3[k, j, l], th=nonlin_thresh)
+            tx_1[k, j, l]   = x_1[k, j, l] + add_inv(tx_2[k, j, l], b[k, j, l]) - add_inv(x_2[k, j, l], b[k, j, l]) # overly explicit. just: tx_1 = tx_2 - b
+            tx_3[k, j, l-1] = x_3[k, j, l-1] + matmul_pinv(tx_1[k, j, l], W[k, j, l], rcond=pinv_rcond) - matmul_pinv(x_1[k, j, l], W[k, j, l], rcond=pinv_rcond)
+
+            # Target prop 'errors / derivatives'
+            dx_2[k, j, l]   = x_2[k, j, l] - tx_2[k, j, l]
+            dx_1[k, j, l]   = x_1[k, j, l] - tx_1[k, j, l]
+            dx_3[k, j, l-1] = x_3[k, j, l] - tx_3[k, j, l]
+
+        # Update variables
+        for l in range(1, layers+1):
+          if j == 0:
+            # Gradient descent
+            dW[k, j, l] = -alpha*np.dot(x_3[k, j, l-1].T, dx_1[k, j, l])/batch_size
+            db[k, j, l] = -alpha*np.mean(dx_2[k, j, l], axis=0)
+          if j == 1:
+            # Psuedoinverse solution
+            db[k, j, l] = np.mean(tx_2[k, j, l] - x_2[k, j, l], axis=0)
+            dW[k, j, l] = np.dot(np.linalg.pinv(x_3[k, j, l-1], rcond=pinv_rcond), (tx_1[k, j, l] - x_1[k, j, l]))
+          
+          # Update variables
+          W[k, j, l] = W[k, j, l] + dW[k, j, l]
+          b[k, j, l] = b[k, j, l] + db[k, j, l]
+
+  for k in range(algs):
+    for j in range(training_algs):
+      # Forward pass test
+      x_3_test[k, j, 0] = data_test.inputs
       for l in range(1, layers+1):
-        if k == 0:
-          dW[k, l] = -alpha*np.dot(x_3[k, l-1].T, dx_1[k, l])/batch_size
-          db[k, l] = -alpha*np.mean(dx_2[k, l], axis=0)
-        elif k == 1:
-          #dW[k, l] = -alpha*np.dot(x_3[k, l-1].T, x_1[k, l] - tx_1[k, l])/batch_size #why does not having a negative sign work???
-          db[k, l] = -alpha*np.mean(x_2[k, l] - tx_2[k, l], axis=0)
-          dW[k, l] = np.dot(np.linalg.pinv(x_3[k, l-1], rcond=0.01), (x_1[k, l] - tx_1[k, l]))
-        W[k, l] = W[k, l] + dW[k, l]
-        b[k, l] = b[k, l] + db[k, l]
+        x_1_test[k, j, l] = matmul(x_3_test[k, j, l-1], W[k, j, l])
+        x_2_test[k, j, l] = add(x_1_test[k, j, l], b[k, j, l])
+        x_3_test[k, j, l] = tanh(x_2_test[k, j, l])
+      L_test[k, j] = cross_entropy(data_test.outputs, x_3_test[k, j, -1])
+      correct_prediction = np.equal(np.argmax(softmax(x_3_test[k, j, -1]), axis=1), np.argmax(data_test.outputs, axis=1))
+      accuracy_test[k, j] = np.mean(correct_prediction.astype('float'))
 
-      # Loss 
-      L[k, t] = cross_entropy(y, x_3[k, -1])
-      correct_prediction = np.equal(np.argmax(softmax(x_3[k, -1]), axis=1), np.argmax(y,axis=1))
-      accuracy[k, t] = np.mean(correct_prediction.astype('float'))
+  return L, accuracy, L_test, accuracy_test
 
-  return L, accuracy
+
 
 def get_preimg(img, func, eps=0.1):
   """ computes the preimage a of set img through func, i.e.
@@ -176,37 +236,9 @@ def get_circle(center, radius, points=100):
   y = radius*np.sin(np.linspace(0, 2*np.pi, num=points)) + center[1]
   return np.stack((x,y))
 
-
 def get_ce_grid(y):
   c = np.linspace(-1, 2, 401)
   x1, x2 = np.meshgrid(c, c)
   x_ = np.stack((x1.flatten(), x2.flatten()))
   ce = cross_entropy(y, x_).reshape([401, 401])
   return x1, x2, ce
-
-def prop(init, L=1):
-  x = []
-  x.append(init)
-  for l in range(1, L+1):
-    x.append(f1(x[-1], l))
-    x.append(f2(x[-1]))
-  return x
-
-def back(init, L=1):
-  y = []
-  y.append(init)
-  for l in range(L, 0, -1):
-    y.append(f2_inv(y[-1]))
-    y.append(f1_inv(y[-1], l))
-  y.reverse()
-  return y
-
-def bprop(init, L=1):
-  d = []
-  d.append(init)
-  for l in range(L, 0, -1):
-    d.append(df2(d[-1]))
-    d.append(df1(d[-1], l))
-  d.reverse()
-  return d
-
