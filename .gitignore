@@ -1,0 +1,13 @@
+*.sublime-project
+*.sublime-workspace
+*.mat
+.ipynb_checkpoints/*
+.ipynb_checkpoints/
+*.DS_Store
+*.npy
+saves/
+saves/*
+*.pyc
+./saves/
+./saves/*
+*.pdf

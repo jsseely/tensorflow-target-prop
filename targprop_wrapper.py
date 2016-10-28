@@ -13,17 +13,16 @@ param_grid = {}
 # train every nth
 # save random seed / np and in tf
 
-param_grid['layers'] = np.random.randint(2, 8, size=1)
-param_grid['alpha'] = 10**np.random.uniform(-4, -1, size=1).astype('float32')
-param_grid['alpha_t'] = np.random.uniform(0, 1, size=1).astype('float32')
-param_grid['pinv_rcond'] = 10**np.random.uniform(-3, 1, size=1).astype('float32')
-param_grid['nonlin_thresh'] = 10**np.random.uniform(-3, 0, size=1).astype('float32')
-
-# Use parameter_grid_split if you want to search only along coordinates.
-# param_grid = parameter_grid_split(param_grid)
+param_grid['layers']        = np.random.randint(2, 8, size=1)
+param_grid['alpha']         = 10**np.random.uniform(-4, -1, size=1)
+param_grid['alpha_t']       = np.random.uniform(0, 1, size=1)
+param_grid['pinv_rcond']    = 10**np.random.uniform(-3, 1, size=1)
+param_grid['nonlin_thresh'] = 10**np.random.uniform(-3, 0, size=1)
+param_grid['beta_1']        = 10**np.random.uniform(-4, 3, size=1)
+param_grid['beta_2']        = 10**np.random.uniform(-4, 3, size=1)
+param_grid['nonlinearity']  = np.random.choice(['tanh', 'sigmoid'], size=1)
 
 i = int(sys.argv[1])
-#j = np.random.randint(0, len(list(ParameterGrid(param_grid)))-1)
 
 # use i if doing a grid search. use j if doing a random search.
 cur_params = ParameterGrid(param_grid)[0]
@@ -61,6 +60,8 @@ L, acc, L_test, acc_test = run_tprop(batch_size=BATCH_SIZE,
                                      SGD=True,
                                      pinv_rcond=cur_params['pinv_rcond'],
                                      nonlin_thresh=cur_params['nonlin_thresh'],
-                                     nonlinearity='tanh')
+                                     beta_1=cur_params['beta_1'],
+                                     beta_2=cur_params['beta_2'],
+                                     nonlinearity=cur_params['nonlinearity'])
 
 pickle.dump([cur_params, L, acc, L_test, acc_test], open(SAVE_PATH+str(i)+'.pickle', 'wb'))

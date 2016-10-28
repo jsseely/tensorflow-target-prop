@@ -38,6 +38,23 @@ def dtanh(x):
   ''' derivative of tanh() '''
   return 1. - tanh(x)**2
 
+# nonlin op
+def nl(x, nonlinearity='tanh'):
+  if nonlinearity == 'tanh':
+    return tanh(x)
+  elif nonlinearity == 'sigmoid':
+    return sigmoid(x)
+def nl_inv(x, nonlinearity='tanh', th=1e-2):
+  if nonlinearity == 'tanh':
+    return tanh_inv(x, th=th)
+  elif nonlinearity == 'sigmoid':
+    return sigmoid_inv(x, th=th)
+def dnl(x, nonlinearity='tanh'):
+  if nonlinearity == 'tanh':
+    return dtanh(x)
+  elif nonlinearity == 'sigmoid':
+    return dsigmoid(x)
+
 # relu ops
 def relu(x):
   return x*(x>0)
@@ -48,7 +65,7 @@ def drelu(x):
 def matmul(x, W):
   return np.dot(x, W)
 def matmul_inv(x, W):
-  return np.dot(x, np.linalg.inv(W))
+  return np.dot(x, np.linalg.pinv(W))
 def matmul_pinv(x, W, rcond = 1e-2):
   return np.dot(x, np.linalg.pinv(W, rcond=rcond))
 
@@ -72,6 +89,8 @@ def run_tprop(batch_size=100,
               SGD=True,
               pinv_rcond=1e-2,
               nonlin_thresh=1e-3,
+              beta_1=0.1,
+              beta_2=0.1,
               nonlinearity='tanh'):
   '''
     main function
@@ -83,8 +102,8 @@ def run_tprop(batch_size=100,
   m_dim = data.inputs.shape[1]
   p_dim = data.outputs.shape[1]
 
-  algs = 2 # there are two error prop algs: backprop and tprop
-  training_algs = 2 # there are two weight update algs: gradient descent and p_inv
+  algs = 3 # there are three error prop algs: backprop, tprop, regularized tprop
+  training_algs = 3 # there are three weight update algs: gradient descent, p_inv, regularized inv
   l_dim = [m_dim] + (layers-1)*[240] + [p_dim] # dimensions of each layer stored as a list
 
   # Forward weights
@@ -151,7 +170,7 @@ def run_tprop(batch_size=100,
         for l in range(1, layers+1):
           x_1[k, j, l] = matmul(x_3[k, j, l-1], W[k, j, l])
           x_2[k, j, l] = add(x_1[k, j, l], b[k, j, l])
-          x_3[k, j, l] = tanh(x_2[k, j, l])
+          x_3[k, j, l] = nl(x_2[k, j, l], nonlinearity)
         L[k, j, t] = cross_entropy(y, x_3[k, j, -1])
         correct_prediction = np.equal(np.argmax(softmax(x_3[k, j, -1]), axis=1), np.argmax(y, axis=1))
         accuracy[k, j, t] = np.mean(correct_prediction.astype('float'))
@@ -165,11 +184,11 @@ def run_tprop(batch_size=100,
           # Backprop
           if k == 0:
             # Backprop (errors / derivatives)
-            dx_2[k, j, l]   = dtanh(x_2[k, j, l]) * dx_3[k, j, l]
+            dx_2[k, j, l]   = dnl(x_2[k, j, l], nonlinearity) * dx_3[k, j, l]
             dx_1[k, j, l]   = dx_2[k, j, l]
             dx_3[k, j, l-1] = matmul(dx_1[k, j, l], W[k, j, l].T)
 
-            # Backprop 'targets'
+            # Backprop 'targets' (used for pinv weight update method)
             tx_2[k, j, l] = x_2[k, j, l] - alpha_t*dx_2[k, j, l]
             tx_1[k, j, l] = x_1[k, j, l] - alpha_t*dx_1[k, j, l]
             tx_3[k, j, l] = x_3[k, j, l] - alpha_t*dx_3[k, j, l]
@@ -177,11 +196,23 @@ def run_tprop(batch_size=100,
           # Target prop
           elif k == 1:
             # Target prop targets
-            tx_2[k, j, l]   = x_2[k, j, l] + tanh_inv(tx_3[k, j, l], th=nonlin_thresh) - tanh_inv(x_3[k, j, l], th=nonlin_thresh)
+            tx_2[k, j, l]   = x_2[k, j, l] + nl_inv(tx_3[k, j, l], nonlinearity, th=nonlin_thresh) - nl_inv(x_3[k, j, l], nonlinearity, th=nonlin_thresh)
             tx_1[k, j, l]   = x_1[k, j, l] + add_inv(tx_2[k, j, l], b[k, j, l]) - add_inv(x_2[k, j, l], b[k, j, l]) # overly explicit. just: tx_1 = tx_2 - b
             tx_3[k, j, l-1] = x_3[k, j, l-1] + matmul_pinv(tx_1[k, j, l], W[k, j, l], rcond=pinv_rcond) - matmul_pinv(x_1[k, j, l], W[k, j, l], rcond=pinv_rcond)
 
-            # Target prop 'errors / derivatives'
+            # Target prop 'errors / derivatives' (used for gradient descent weight update method)
+            dx_2[k, j, l]   = x_2[k, j, l] - tx_2[k, j, l]
+            dx_1[k, j, l]   = x_1[k, j, l] - tx_1[k, j, l]
+            dx_3[k, j, l-1] = x_3[k, j, l] - tx_3[k, j, l]
+
+          # Regularized target prop
+          elif k == 2:
+            # tx_2 and tx_1 same as above.
+            tx_2[k, j, l]   = x_2[k, j, l] + nl_inv(tx_3[k, j, l], nonlinearity, th=nonlin_thresh) - nl_inv(x_3[k, j, l], nonlinearity, th=nonlin_thresh)
+            tx_1[k, j, l]   = x_1[k, j, l] + add_inv(tx_2[k, j, l], b[k, j, l]) - add_inv(x_2[k, j, l], b[k, j, l]) # overly explicit. just: tx_1 = tx_2 - b
+            tx_3[k, j, l-1] = np.dot(np.dot(tx_1[k, j, l], W[k, j, l].T) + beta_1*x_3[k, j, l-1], np.linalg.pinv(np.dot(W[k, j, l], W[k, j, l].T) + beta_1*np.eye(l_dim[l-1]))) # use pinv to avoid very illconditioned matrices
+           
+            # Target prop 'errors / derivatives' (used for gradient descent weight update method)
             dx_2[k, j, l]   = x_2[k, j, l] - tx_2[k, j, l]
             dx_1[k, j, l]   = x_1[k, j, l] - tx_1[k, j, l]
             dx_3[k, j, l-1] = x_3[k, j, l] - tx_3[k, j, l]
@@ -192,15 +223,18 @@ def run_tprop(batch_size=100,
             # Gradient descent
             dW[k, j, l] = -alpha*np.dot(x_3[k, j, l-1].T, dx_1[k, j, l])/batch_size
             db[k, j, l] = -alpha*np.mean(dx_2[k, j, l], axis=0)
-          if j == 1:
+          elif j == 1:
             # Psuedoinverse solution
             db[k, j, l] = np.mean(tx_2[k, j, l] - x_2[k, j, l], axis=0)
             dW[k, j, l] = np.dot(np.linalg.pinv(x_3[k, j, l-1], rcond=pinv_rcond), (tx_1[k, j, l] - x_1[k, j, l]))
-          
+          elif j == 2:
+            db[k, j, l] = np.mean(tx_2[k, j, l] - x_2[k, j, l], axis=0)
+            dW[k, j, l] = np.dot(np.linalg.pinv(beta_2*np.eye(l_dim[l-1]) + np.dot(x_3[k, j, l-1].T, x_3[k, j, l-1])), np.dot(x_3[k, j, l-1].T, tx_1[k, j, l]) + beta_2*W[k, j, l]) - W[k, j, l] # subtract W[k, j, l] because of the weight update step in the next line. Use pinv to avoid very ill conditioned matrices
           # Update variables
           W[k, j, l] = W[k, j, l] + dW[k, j, l]
           b[k, j, l] = b[k, j, l] + db[k, j, l]
 
+  # Now get test error
   for k in range(algs):
     for j in range(training_algs):
       # Forward pass test
@@ -208,7 +242,7 @@ def run_tprop(batch_size=100,
       for l in range(1, layers+1):
         x_1_test[k, j, l] = matmul(x_3_test[k, j, l-1], W[k, j, l])
         x_2_test[k, j, l] = add(x_1_test[k, j, l], b[k, j, l])
-        x_3_test[k, j, l] = tanh(x_2_test[k, j, l])
+        x_3_test[k, j, l] = nl(x_2_test[k, j, l], nonlinearity)
       L_test[k, j] = cross_entropy(data_test.outputs, x_3_test[k, j, -1])
       correct_prediction = np.equal(np.argmax(softmax(x_3_test[k, j, -1]), axis=1), np.argmax(data_test.outputs, axis=1))
       accuracy_test[k, j] = np.mean(correct_prediction.astype('float'))
