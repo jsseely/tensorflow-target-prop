@@ -11,3 +11,4 @@ saves/*
 ./saves/
 ./saves/*
 *.pdf
+*.pickle
