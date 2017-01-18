@@ -9,18 +9,20 @@ from targprop import *
 # Iterable parameters
 param_grid = {}
 
-# # RNN and training parameters
-# train every nth
-# save random seed / np and in tf
-
+param_grid['batch_size']    = np.random.choice([100, 300, 1000], size=1)
 param_grid['layers']        = np.random.randint(2, 8, size=1)
-param_grid['alpha']         = 10**np.random.uniform(-4, -1, size=1)
-param_grid['alpha_t']       = np.random.uniform(0, 1, size=1)
-param_grid['pinv_rcond']    = 10**np.random.uniform(-3, 1, size=1)
-param_grid['nonlin_thresh'] = 10**np.random.uniform(-3, 0, size=1)
-param_grid['beta_1']        = 10**np.random.uniform(-4, 3, size=1)
-param_grid['beta_2']        = 10**np.random.uniform(-4, 3, size=1)
-param_grid['nonlinearity']  = np.random.choice(['tanh', 'sigmoid'], size=1)
+param_grid['h_dim']         = np.random.randint(200, 600, size=1)
+param_grid['nonlinearity']  = np.random.choice(['tanh', 'relu'], size=1)
+
+param_grid['alpha']         = 10**np.random.uniform(-3, 0, size=1)
+param_grid['alpha_inv']     = np.random.uniform(0, 1, size=1)
+
+param_grid['beta_t']        = 10**np.random.uniform(-4, 3, size=1)
+param_grid['beta_W']        = 10**np.random.uniform(-4, 3, size=1)
+param_grid['beta_b']        = 10**np.random.uniform(-4, 3, size=1)
+
+param_grid['err_algs']      = np.random.choice([0, 1, 2], size=1)
+param_grid['training_algs'] = np.random.choice([0, 1, 2], size=1)
 
 i = int(sys.argv[1])
 
@@ -28,11 +30,16 @@ i = int(sys.argv[1])
 cur_params = ParameterGrid(param_grid)[0]
 
 # Fixed parameters
-BATCH_SIZE = 100
-T_STEPS = 2000
+#BATCH_SIZE = 100
+T_STEPS = 4000
 
 # Current run and paths
 CUR_RUN = str(sys.argv[2])
+DATASET = str(sys.argv[3])
+if DATASET == 'cifar':
+  preprocess = True
+elif DATASET == 'mnist':
+  preprocess = False
 
 SAVE_PATH = os.getcwd()+'/saves/'+CUR_RUN+'/'
 
@@ -52,16 +59,23 @@ print('Current Run: '+CUR_RUN)
 
 print(cur_params)
 
-L, acc, L_test, acc_test = run_tprop(batch_size=BATCH_SIZE,
-                                     t_steps=T_STEPS,
-                                     layers=cur_params['layers'],
-                                     alpha=cur_params['alpha'],
-                                     alpha_t=cur_params['alpha_t'],
-                                     SGD=True,
-                                     pinv_rcond=cur_params['pinv_rcond'],
-                                     nonlin_thresh=cur_params['nonlin_thresh'],
-                                     beta_1=cur_params['beta_1'],
-                                     beta_2=cur_params['beta_2'],
-                                     nonlinearity=cur_params['nonlinearity'])
+L, acc, L_test, acc_test, activations = run_tprop(batch_size=cur_params['batch_size'],
+                                                   t_steps=T_STEPS,
+                                                   SGD=True,
+                                                   layers=cur_params['layers'],
+                                                   h_dim=cur_params['h_dim'],
+                                                   nonlinearity=cur_params['nonlinearity'],
+                                                   alpha=cur_params['alpha'],
+                                                   alpha_t=1,
+                                                   alpha_inv=cur_params['alpha_inv'],
+                                                   beta_t=cur_params['beta_t'],
+                                                   beta_W=cur_params['beta_W'],
+                                                   beta_b=cur_params['beta_b'],
+                                                   pinv_rcond=1e-3,
+                                                   nonlin_thresh=1e-2,
+                                                   err_algs=[cur_params['err_algs']],
+                                                   training_algs=[cur_params['training_algs']],
+                                                   dataset=DATASET,
+                                                   preprocess=preprocess)
 
-pickle.dump([cur_params, L, acc, L_test, acc_test], open(SAVE_PATH+str(i)+'.pickle', 'wb'))
+pickle.dump([cur_params, L, acc, L_test, acc_test, activations], open(SAVE_PATH+str(i)+'.pickle', 'wb'))

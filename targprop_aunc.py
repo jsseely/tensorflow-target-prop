@@ -119,25 +119,27 @@ def softmax(x):
   return np.exp(x)/np.sum(np.exp(x), axis=1, keepdims=True)
 def cross_entropy(y, x):
   return np.sum(-y*np.log(softmax(x)), axis=1, keepdims=True).mean()
+def mse(y, x):
+  return np.mean((x - y)**2)
 
-def run_tprop(batch_size=100,
-              t_steps=200,
-              SGD=True,
-              layers=3,
-              h_dim=240,
-              nonlinearity='tanh',
-              alpha=0.003,
-              alpha_t=0.1,
-              alpha_inv=0.5,
-              beta_t=0.1,
-              beta_W=0.1,
-              beta_b=0.1,
-              pinv_rcond=1e-3,
-              nonlin_thresh=1e-2,
-              err_algs=[0,1,2],
-              training_algs=[0,1,2],
-              dataset='mnist',
-              preprocess=False):
+def run_tprop_aunc(batch_size=100,
+                    t_steps=200,
+                    SGD=True,
+                    layers=6,
+                    h_dim=10,
+                    nonlinearity='tanh',
+                    alpha=0.003,
+                    alpha_t=0.1,
+                    alpha_inv=0.5,
+                    beta_t=0.1,
+                    beta_W=0.1,
+                    beta_b=0.1,
+                    pinv_rcond=1e-3,
+                    nonlin_thresh=1e-2,
+                    err_algs=[0,1,2],
+                    training_algs=[0,1,2],
+                    dataset='mnist',
+                    preprocess=False):
   '''
     batch_size (int, > 0): the number of examples in each training batch
     t_steps (int, > 0): the number of training steps
@@ -157,7 +159,7 @@ def run_tprop(batch_size=100,
     pinv_rcond (float, > 0): rcond value for np.linalg.pinv(), used in a couple places in the code. 
     nonlin_thresh (float, >0): threshold cutoffs for defining the generalized inverses for sigmoid and tanh. 
 
-    dataset ('mnist', 'cifar'): whcih dataset to use. 
+    dataset ('mnist', 'cifar'): which dataset to use. 
     preprocess (bool): preprocess the data with PCA + whitening. 
   '''
 
@@ -174,17 +176,36 @@ def run_tprop(batch_size=100,
     data.inputs = pca.fit_transform(data.inputs)
     data_test.inputs = pca.transform(data_test.inputs)
 
+  # autoencoder
+  data.outputs = data.inputs
+  data_test.outputs = data_test.inputs
+
   # Model parameters
   m_dim = data.inputs.shape[1]
   p_dim = data.outputs.shape[1]
+  
+  #err_algs = [0, 1, 2] # Which set of error prop algs to use
+  #training_algs = [0, 1, 2] # Which set of weight update algs to use
 
-  err_algs = [0, 1, 2] # Which set of error prop algs to use
-  training_algs = [0, 1, 2] # Which set of weight update algs to use
-
+  # TODO: should ben len(err_algs), but this messes up the ipynb workflow...
   n_err_algs = 3 # there are three error prop algs: backprop, tprop, regularized tprop
   n_training_algs = 3 # there are three weight update algs: gradient descent, p_inv, regularized inv
-  
-  l_dim = [m_dim] + (layers-1)*[h_dim] + [p_dim] # dimensions of each layer stored as a list
+
+  # Old option
+  # if layers == 4:
+  #   l_dim = [m_dim] + [128, 32, 128] + [p_dim]
+  # elif layers == 6:
+  #   l_dim = [m_dim] + [128, 64, 32, 64, 128] + [p_dim]
+  # elif layers == 8:
+  #   l_dim = [m_dim] + [256, 128, 64, 32, 64, 128, 256] + [p_dim]
+
+  # New option
+  if layers == 4:
+    l_dim = [m_dim] + [50] + [h_dim] + [50] + [p_dim]
+  elif layers == 6:
+    l_dim = [m_dim] + [50, 50] + [h_dim] + [50, 50] + [p_dim]
+  elif layers == 8:
+    l_dim = [m_dim] + [50, 50, 50] + [h_dim] + [50, 50, 50] + [p_dim]
 
   # Set up np.zero arrays for all variables.
   # Forward weights
@@ -195,10 +216,8 @@ def run_tprop(batch_size=100,
   db = np.zeros((n_err_algs, n_training_algs, layers+1), dtype=object) # dl/db
   # Loss
   L = np.zeros((n_err_algs, n_training_algs, t_steps+1)) # loss
-  accuracy = np.zeros((n_err_algs, n_training_algs, t_steps+1)) # accuracy
   # Loss for test data
   L_test = np.zeros((n_err_algs, n_training_algs))
-  accuracy_test = np.zeros((n_err_algs, n_training_algs))
 
   # Initialize
   for k in err_algs:
@@ -206,8 +225,8 @@ def run_tprop(batch_size=100,
       for l in range(1, layers+1):
         # TODO: make orth() robust to l_dim[2] > l_dim[1]. Actually -- Orth should be on transpose of matrix. 
         np.random.seed(l) # different random seed for each layer. Otherwise, same. For replicability.
-        #W[k, j, l] = np.random.unif(l_dim[l-1], l_dim[l])/np.sqrt(l_dim[l-1])
-        W[k, j, l] = 0.9*sp.linalg.orth(np.random.randn(l_dim[l-1], l_dim[l]))
+        W[k, j, l] = np.random.randn(l_dim[l-1], l_dim[l])/np.sqrt(l_dim[l-1] + l_dim[l])
+        #W[k, j, l] = 0.9*sp.linalg.orth(np.random.randn(l_dim[l-1], l_dim[l]))
         b[k, j, l] = 0*np.ones((1, l_dim[l]))
 
   # Activations
@@ -254,9 +273,7 @@ def run_tprop(batch_size=100,
           x_1[k, j, l] = matmul(x_3[k, j, l-1], W[k, j, l])
           x_2[k, j, l] = add(x_1[k, j, l], b[k, j, l])
           x_3[k, j, l] = nl(x_2[k, j, l], nonlinearity)
-        L[k, j, t] = cross_entropy(y, x_3[k, j, -1])
-        correct_prediction = np.equal(np.argmax(softmax(x_3[k, j, -1]), axis=1), np.argmax(y, axis=1))
-        accuracy[k, j, t] = np.mean(correct_prediction.astype('float'))
+        L[k, j, t] = mse(y, x_3[k, j, -1])
 
         # STEP 2: Backward pass
         # Top layer errors and targets
@@ -323,9 +340,9 @@ def run_tprop(batch_size=100,
           b[k, j, l] = b[k, j, l] + db[k, j, l]
 
           # If parameters are exploding, just set to 0 so it doesn't effect performance of other methods.
-          if np.abs(W[k, j, l]).max() > 1e3:
+          if np.abs(W[k, j, l]).max() > 1e4:
             W[k, j, l] = np.zeros((l_dim[l-1], l_dim[l]))
-          if np.abs(b[k, j, l]).max() > 1e3:
+          if np.abs(b[k, j, l]).max() > 1e4:
             b[k, j, l] = np.zeros((1, l_dim[l]))
 
   # After training, get test error
@@ -337,9 +354,7 @@ def run_tprop(batch_size=100,
         x_1_test[k, j, l] = matmul(x_3_test[k, j, l-1], W[k, j, l])
         x_2_test[k, j, l] = add(x_1_test[k, j, l], b[k, j, l])
         x_3_test[k, j, l] = nl(x_2_test[k, j, l], nonlinearity)
-      L_test[k, j] = cross_entropy(data_test.outputs, x_3_test[k, j, -1])
-      correct_prediction = np.equal(np.argmax(softmax(x_3_test[k, j, -1]), axis=1), np.argmax(data_test.outputs, axis=1))
-      accuracy_test[k, j] = np.mean(correct_prediction.astype('float'))
+      L_test[k, j] = mse(data_test.outputs, x_3_test[k, j, -1])
 
   # Activations to save
   actvs = np.zeros((n_err_algs, n_training_algs), dtype=object)
@@ -347,7 +362,7 @@ def run_tprop(batch_size=100,
     for j in training_algs:
       actvs[k, j] = x_3_test[k, j, -1][:20]
 
-  return L, accuracy, L_test, accuracy_test, actvs
+  return L, L_test, actvs
 
 
 # Plotting functions. For ipynb.

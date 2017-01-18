@@ -5,6 +5,11 @@
   # TODO: add DataSet.train.inputs, DataSet.train.outputs, DataSet.test... etc. 
 """
 import numpy as np
+import gzip
+import os
+import sys
+import tarfile
+from six.moves import urllib
 
 ### DATASET CLASS
 class DataSet(object):
@@ -132,6 +137,7 @@ def xor_data():
   outputs = np.array([[1], [-1], [1], [-1]]).astype('float32')
   return DataSet(inputs, outputs)
 
+
 ### REAL DATA
 def mnist_data():
   from tensorflow.examples.tutorials.mnist import input_data
@@ -144,14 +150,60 @@ def mnist_data_test():
   mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
   return DataSet(mnist.test.images, mnist.test.labels)
 
-def simple_mnist_data(digits=3):
-  from tensorflow.examples.tutorials.mnist import input_data
-  mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
-  inds = mnist.train.labels[:, :digits].sum(axis=1).astype('bool')
-  return DataSet(mnist.train.images[inds], mnist.train.labels[inds])
+# def simple_mnist_data(digits=3):
+#   from tensorflow.examples.tutorials.mnist import input_data
+#   mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
+#   inds = mnist.train.labels[:, :digits].sum(axis=1).astype('bool')
+#   return DataSet(mnist.train.images[inds], mnist.train.labels[inds])
+
+def cifar10_data():
+  maybe_download_and_extract('http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz')
+  batch1 = unpickle('./cifar10_data/cifar-10-batches-py/data_batch_1')
+  batch2 = unpickle('./cifar10_data/cifar-10-batches-py/data_batch_2')
+  batch3 = unpickle('./cifar10_data/cifar-10-batches-py/data_batch_3')
+  batch4 = unpickle('./cifar10_data/cifar-10-batches-py/data_batch_4')
+  batch5 = unpickle('./cifar10_data/cifar-10-batches-py/data_batch_5')
+  inputs = np.concatenate((batch1['data'], batch2['data'], batch3['data'], batch4['data'], batch5['data'])).astype('float32')
+  outputs = np.concatenate((batch1['labels'], batch2['labels'], batch3['labels'], batch4['labels'], batch5['labels'])).astype('float32')
+  outputs = one_hotify(outputs)
+  return DataSet(inputs, outputs)
+
+def cifar10_data_test():
+  maybe_download_and_extract('http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz')
+  test   = unpickle('./cifar10_data/cifar-10-batches-py/test_batch')
+  inputs = np.array(test['data']).astype('float32')
+  outputs = np.array(test['labels']).astype('float32')
+  outputs = one_hotify(outputs)
+  return DataSet(inputs, outputs)
 
 ### HELPFUL FUNCTIONS
 # TODO: make part of DataSet class.
+
+def unpickle(file):
+  import cPickle
+  fo = open(file, 'rb')
+  dict = cPickle.load(fo)
+  fo.close()
+  return dict
+
+def maybe_download_and_extract(data_url):
+  """ From tensorflow cifar10 tutorial """
+  dest_directory = './cifar10_data'
+  if not os.path.exists(dest_directory):
+    os.makedirs(dest_directory)
+  filename = data_url.split('/')[-1]
+  filepath = os.path.join(dest_directory, filename)
+  if not os.path.exists(filepath):
+    def _progress(count, block_size, total_size):
+      sys.stdout.write('\r>> Downloading %s %.1f%%' % (filename,
+          float(count * block_size) / float(total_size) * 100.0))
+      sys.stdout.flush()
+    filepath, _ = urllib.request.urlretrieve(data_url, filepath, _progress)
+    print()
+    statinfo = os.stat(filepath)
+    print('Successfully downloaded', filename, statinfo.st_size, 'bytes.')
+    tarfile.open(filepath, 'r:gz').extractall(dest_directory)
+
 def combine_data(data):
   """
     Turns a list of DataSet objects into one DataSet object, where .inputs and .outputs are concatenated.

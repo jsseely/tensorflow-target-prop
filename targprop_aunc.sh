@@ -13,4 +13,4 @@
 # source /vega/zmbbi/users/jss2219/miniconda2/bin/activate tensorflow
 
 # Yeti doesn't have glibc, so have to run it this way:
-LD_LIBRARY_PATH="/vega/zmbbi/users/jss2219/glibc/lib/x86_64-linux-gnu/:/vega/zmbbi/users/jss2219/glibc/usr/lib64/" /vega/zmbbi/users/jss2219/glibc/lib/x86_64-linux-gnu/ld-2.17.so `which python` targprop_wrapper.py $PBS_ARRAYID "mnist_nov29" "mnist"
+LD_LIBRARY_PATH="/vega/zmbbi/users/jss2219/glibc/lib/x86_64-linux-gnu/:/vega/zmbbi/users/jss2219/glibc/usr/lib64/" /vega/zmbbi/users/jss2219/glibc/lib/x86_64-linux-gnu/ld-2.17.so `which python` targprop_aunc_wrapper.py $PBS_ARRAYID "mnist_aunc" "mnist"
