@@ -6,7 +6,7 @@
 *.pdf
 *.pickle
 *.DS_Store
-.ipynb_checkpoints/*
-saves/*
-cifar10_data/*
-MNIST_data/*
+.ipynb_checkpoints/
+saves/
+cifar10_data/
+MNIST_data/
