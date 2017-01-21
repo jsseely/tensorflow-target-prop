@@ -27,8 +27,7 @@ def run_tprop(batch_size=100,
               alpha=0.1,
               beta=0,
               learning_rate=0.01,
-              dtp_method=1,
-              return_sess=False):
+              dtp_method=1):
   """
     TODO:
       so much
@@ -65,12 +64,12 @@ def run_tprop(batch_size=100,
   tf.set_random_seed(1234)
 
   # placeholders
-  x_in = tf.placeholder(tf.float32, shape=[batch_size, m_dim], name='x_in') # Input
-  y = tf.placeholder(tf.float32, shape=[batch_size, p_dim], name='y') # Output
-  epoch = tf.placeholder(tf.float32, shape=None, name='epoch') # training iteration
+  x_in = tf.placeholder(tf.float32, shape=[batch_size, m_dim]) # Input
+  y = tf.placeholder(tf.float32, shape=[batch_size, p_dim]) # Output
+  epoch = tf.placeholder(tf.float32, shape=None) # training iteration
 
   # TODO: see paper for best value
-  noise_inj = 0.1/(1.+epoch/200.) # stddev
+  noise_inj = 1./(1.+epoch/200.) # stddev
 
   # Initialize lists.
   b = (layers+1)*[None] 
@@ -84,93 +83,87 @@ def run_tprop(batch_size=100,
   V = (layers+1)*[None] # feedback matrix
   c = (layers+1)*[None] # feedback bias
 
-  eps = (layers+1)*[None] # noise in L_inv term
-  scope = (layers+1)*[None] # store some scopes!
-  
+  x_c = (layers+1)*[None] # x + noise
+  fx_c = (layers+1)*[None] # f(x + noise)
+
   train_op_inv = (layers+1)*[None]
   train_op_L = (layers+1)*[None]
 
   # Variable creation
   # Forward graph
   for l in range(1, layers+1):
-    with tf.variable_scope('Layer'+str(l)) as scope[l]:
-      b[l] = tf.get_variable( 'b', [1, l_dim[l]], tf.float32, tf.constant_initializer(b_init))
-      W[l] = tf.get_variable( 'W', [l_dim[l-1], l_dim[l]], tf.float32, tf.orthogonal_initializer(0.5))
+    with tf.name_scope('Layer_Forward'+str(l)):
+      b[l] = tf.Variable(tf.constant(b_init, shape=[1, l_dim[l]]), name='b')
+      #W[l] = tf.Variable(np.linalg.qr(np.random.randn(l_dim[l-1], l_dim[l]))[0].astype('float32'), name='W') #orthonormal initialization
+      W[l] = tf.Variable(tf.truncated_normal([l_dim[l-1], l_dim[l]], stddev=np.sqrt(6./(l_dim[l-1]+l_dim[l]))), name='W') # Random initialization
   # Feedback graph
   for l in range(layers, 1, -1):
-    with tf.variable_scope('Layer'+str(l)):
+    with tf.name_scope('Layer_Feedback'+str(l)):
       if dtp_method==1:
-        c[l] = tf.get_variable( 'c', [1, l_dim[l-1]], tf.float32, tf.constant_initializer(b_init))
-        V[l] = tf.get_variable( 'V', [l_dim[l], l_dim[l-1]], tf.float32, tf.orthogonal_initializer(0.5))
+        c[l] = tf.Variable(tf.constant(b_init, shape=[1, l_dim[l-1]]), name='c')
+        V[l] = tf.Variable(tf.truncated_normal([l_dim[l], l_dim[l-1]], stddev=np.sqrt(6./(l_dim[l-1]+l_dim[l]))), name='V')
       if dtp_method==2:
-        c[l] = tf.get_variable( 'c', [1, l_dim[l-1]], tf.float32, tf.constant_initializer(b_init))
-        V[l] = tf.get_variable( 'V', [l_dim[l]+l_dim[l-1], l_dim[l-1]], tf.float32, tf.orthogonal_initializer(0.5))
+        c[l] = tf.Variable(tf.constant(b_init, shape=[1, l_dim[l-1]]), name='c')
+        V[l] = tf.Variable(tf.truncated_normal([l_dim[l]+l_dim[l-1], l_dim[l-1]], stddev=np.sqrt(6./(2*l_dim[l-1]+l_dim[l]))), name='V')
 
   # Feedforward functions
   def f(layer, inp):
     """map from layer layer-1 to layer; inp is the inp"""
-    with tf.variable_scope('Layer'+str(layer), reuse=True):
-      W_ = tf.get_variable( 'W' )
-      b_ = tf.get_variable( 'b' )
-    return tf.nn.tanh(tf.matmul(inp, W_) + b_, name='f'+str(layer)) # debug: switch to identity...
+    return tf.nn.tanh(tf.matmul(inp, W[layer]) + b[layer], name='f')
+  def f_stop(layer, inp):
+    """like f, but with stop_gradients on parameters"""
+    return tf.nn.tanh(tf.matmul(inp, tf.stop_gradient(W[layer]) + tf.stop_gradient(b[layer])), name='f_stop')
 
   # Feedback functions
   def g(layer, inp):
-    with tf.variable_scope('Layer'+str(layer), reuse=True):
-      V_ = tf.get_variable( 'V' )
-      c_ = tf.get_variable( 'c' )
-    return tf.nn.tanh(tf.matmul(inp, V_) + c_, name='g'+str(layer))
-
+    """map from layer layer to layer-1; inp is inp"""
+    return tf.nn.tanh(tf.matmul(inp, V[layer]) + c[layer], name='g')
   def g_full(layer, input1, input2):
     """ generalized g. g(x_[layer], x[layer-1]) -> x_[layer-1] """
-    with tf.variable_scope('Layer'+str(layer), reuse=True):
-      V_ = tf.get_variable( 'V' )
-      c_ = tf.get_variable( 'c' )
-    return tf.nn.tanh(tf.matmul(tf.concat( 1, [input1, input2] ), V_) + c_, name='g_full'+str(layer))
+    return tf.nn.tanh(tf.matmul(tf.concat( 1, [input1, input2] ), V[layer]) + c[layer], name='g_full')
 
   # Forward propagation
   x[0] = x_in
   for l in range(1, layers+1):
-    x[l] = tf.identity(f(l, x[l-1]), name='x'+str(l)) # TODO: remove identites
-    # TOP LAYER SHOULD BE SOFTMAX
-
-
+    with tf.name_scope('Layer_Forward'+str(l)):
+      x[l] = f(l, x[l-1])
   # Top layer loss / top layer target
-  # TODO: TOP LOSS SHOULD NOT INCLUDE REDUCE_MEAN -- MUST SEND A SET OF TARGETS BACK, NOT THE AVERAGE!
-  #L[-1] = tf.reduce_mean(-tf.reduce_sum(y*tf.log(tf.nn.softmax(x[-1])), reduction_indices=[1]), name='global_loss')
-  # L[-1] = tf.nn.softmax_cross_entropy_with_logits(x[-1], y)
-  #x_[-1] = tf.identity(x[-1] - alpha*tf.gradients(L[-1], [x[-1]])[0], name='xtar'+str(layers))
-
-  # UGH
-  #L[-1] = L[-1] = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(x[-1], y))
-  x_[-1] = x[-1] - alpha*(x[-1] - y)
-
-
+  L[-1] = tf.reduce_mean(-tf.reduce_sum(y*tf.log(tf.nn.softmax(x[-1])), reduction_indices=[1]))
+  x_[-1] = x[-1] - alpha*tf.gradients(L[-1], [x[-1]])[0]
   # Feedback propagation
   for l in range(layers, 1, -1):
-    if dtp_method==1:
-      x_[l-1] = tf.identity(x[l-1] - g(l, x[l]) + g(l, x_[l]), name='xtar'+str(l-1))
-    if dtp_method==2:
-      x_[l-1] = g_full(l, x_[l], x[l-1])
+    with tf.name_scope('Layer_Feedback'+str(l)):
+      if dtp_method==1:
+        x_[l-1] = x[l-1] - g(l, x[l]) + g(l, x_[l])
+      if dtp_method==2:
+        x_[l-1] = g_full(l, x_[l], x[l-1])
+
+  # Corrupted targets
+  for l in range(1, layers):
+    with tf.name_scope('Corrupted'+str(l)):
+      x_c[l] = tf.stop_gradient(tf.random_normal([1, l_dim[l]], mean=x[l], stddev=noise_inj), name='x_c')
+      fx_c[l+1] = tf.stop_gradient(f(l+1, x_c[l]), name='fx_c')
 
   # Loss functions
-  for l in range(1, layers+1): # FOR NOW; LAYERS+1, BUT SHOULD BE LAYERS
-    L[l] = tf.reduce_mean(0.5*(x[l] - x_[l])**2, name='L'+str(l))
+  for l in range(1, layers):
+    with tf.name_scope('L'+str(l)):
+      # checked: both options equivalent
+      #L[l] = tf.reduce_mean(0.5*(f(l, x[l-1]) - x_[l])**2, name='L')
+      L[l] = tf.reduce_mean(0.5*(x[l] - x_[l])**2, name='L')
   for l in range(2, layers+1):
     if dtp_method==1:
-      eps[l-1] = noise_inj*tf.random_normal([batch_size, l_dim[l-1]], mean=0, stddev=1., name='eps'+str(l-1)) # TODO: NOISE_INJ MULT OR SET AS STDDEV??/
-      L_inv[l] = tf.reduce_mean(0.5*(g(l, f(l, x[l-1] + eps[l-1])) - (x[l-1] + eps[l-1]))**2, name='L_inv'+str(l))
+      L_inv[l] = tf.reduce_mean(0.5*(g(l, fx_c[l]) - x_c[l-1])**2, name='L_inv')
     if dtp_method==2:
-      L_inv[l] = tf.add(tf.reduce_mean(0.5*(f(l, g_full(l, x_[l], x[l-1])) - x_[l])**2), beta*tf.reduce_mean(0.5*(g_full(l, x_[l], x[l-1]) - x[l-1])**2), name='L_inv') # triple check -- where to put beta, where to put reducee_means? 
+      L_inv[l] = tf.reduce_mean(0.5*(f(l, g_full(l, x_[l], x[l-1])) - x_[l])**2) + beta*tf.reduce_mean(0.5*(g_full(l, x_[l], x[l-1]) - x[l-1])**2) # triple check -- where to put beta, where to put reducee_means? 
 
   # Optimizers
   #opt = tf.train.AdamOptimizer(0.001)
-  #opt = tf.train.GradientDescentOptimizer(learning_rate)
-  gate_gradients=tf.train.GradientDescentOptimizer(1).GATE_NONE # yo, whats this?
+  opt = tf.train.GradientDescentOptimizer(learning_rate)
+  gate_gradients=opt.GATE_OP # yo, whats this?
   for l in range(1, layers+1):
-    train_op_L[l] = tf.train.GradientDescentOptimizer(learning_rate).minimize(L[l], var_list=[W[l], b[l]], gate_gradients=gate_gradients)
+    train_op_L[l] = opt.minimize(L[l], var_list=[W[l], b[l]], gate_gradients=gate_gradients)
   for l in range(2, layers+1):
-    train_op_inv[l] = tf.train.GradientDescentOptimizer(learning_rate).minimize(L_inv[l], var_list=[V[l], c[l]], gate_gradients=gate_gradients)
+    train_op_inv[l] = opt.minimize(L_inv[l], var_list=[V[l], c[l]], gate_gradients=gate_gradients)
 
   # Backprop. for reference
   #train_bp = opt.minimize(L[-1], var_list=[i for i in W+b if i is not None])
@@ -180,23 +173,28 @@ def run_tprop(batch_size=100,
 
   # clean up
   train_op_L = [i for i in train_op_L if i is not None]
+  # OPTION 1
   train_op_inv = [i for i in train_op_inv if i is not None]
+  # OPTION 2
+  #train_op_C = [i for i in train_op_C if i is not None]
 
   # Tensorboard
-  with tf.name_scope('summaries'):
-    tf.summary.scalar('accuracy', accuracy)
-    for l in range(layers+1):
+  for l in range(layers+1):
+    with tf.name_scope('Layer_loss'):
       if L[l] is not None:
         tf.summary.scalar('L'+str(l), L[l])
+    with tf.name_scope('Layer_loss_inv'):
       if L_inv[l] is not None:
         tf.summary.scalar('L_inv'+str(l), L_inv[l])
+    with tf.name_scope('targets'):
       if x_[l] is not None:
-        tf.summary.scalar('x_target'+str(l), x_[l][0,0])
+        tf.summary.scalar('x_target'+str(l), tf.reduce_mean(x_[l]))
+  tf.summary.scalar('accuracy', accuracy)
 
-    for varlist in ['W', 'V']:
-      for iv, var in enumerate(eval(varlist)):
-        if var is not None:
-          tf.summary.histogram(varlist+str(iv), var)
+  for varlist in ['W','b','V','c']:
+    for iv, var in enumerate(eval(varlist)):
+      if var is not None:
+        tf.summary.histogram(varlist+str(iv), var)
     
     merged_summary_op = tf.summary.merge_all()
 
@@ -218,7 +216,7 @@ def run_tprop(batch_size=100,
     sess.run(train_op_L, feed_dict=feed_dict)
     #sess.run(train_bp, feed_dict=feed_dict)
 
-    if i % 100 == 0:
+    if i % 50 == 0:
       loss_val, summary_str, acc_val = sess.run([L[-1], merged_summary_op, accuracy], feed_dict=feed_dict)
       summary_writer.add_summary(summary_str, i)
 
@@ -228,10 +226,7 @@ def run_tprop(batch_size=100,
         "accuracy:", "{:.4f}".format(acc_val)
 
   print "finished"
+  sess.close()
 
-  if return_sess:
-    return sess
-  else:
-    sess.close()
-    return
+
 
