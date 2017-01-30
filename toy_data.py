@@ -87,6 +87,8 @@ class DataSet(object):
       return self._inputs[start:end], self._outputs[start:end]
 
 
+
+
 ### TOY DATA
 def sphere(n=100, d=3, r=1., c=0):
   """
@@ -137,6 +139,9 @@ def xor_data():
   outputs = np.array([[1], [-1], [1], [-1]]).astype('float32')
   return DataSet(inputs, outputs)
 
+# def spiral(n=100, d=2, r=1, ):
+
+
 
 ### REAL DATA
 def mnist_data():
@@ -149,12 +154,6 @@ def mnist_data_test():
   from tensorflow.examples.tutorials.mnist import input_data
   mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
   return DataSet(mnist.test.images, mnist.test.labels)
-
-# def simple_mnist_data(digits=3):
-#   from tensorflow.examples.tutorials.mnist import input_data
-#   mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
-#   inds = mnist.train.labels[:, :digits].sum(axis=1).astype('bool')
-#   return DataSet(mnist.train.images[inds], mnist.train.labels[inds])
 
 def cifar10_data():
   maybe_download_and_extract('http://www.cs.toronto.edu/~kriz/cifar-10-python.tar.gz')
@@ -176,9 +175,8 @@ def cifar10_data_test():
   outputs = one_hotify(outputs)
   return DataSet(inputs, outputs)
 
-### HELPFUL FUNCTIONS
+### HELPER FUNCTIONS
 # TODO: make part of DataSet class.
-
 def unpickle(file):
   import cPickle
   fo = open(file, 'rb')

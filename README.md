@@ -11,6 +11,10 @@ Target propagation is an alternative to backpropagation that propagates targets 
 
 The layer inverses can be defined explicitly or learned.
 
+Files:
+- `targprop.py` contains the numpy implementation of difference target propagation and regularized target propagation. The main function, `run_tprop()` trains a simple feedforward MNIST classifier using three different target/error propagation methods (`err_algs`) and three different weight update methods (`training_algs`). At the moment, it is still not the most user-friendly code...
+- `targproptflow.py` contains the tensorflow implementation of difference target propagation and some exploratory versions of regularized target propagation. Here, tensorflow is basically only used to apply gradient descent on the layer-local cost functions.
+
 -----------
 
 ### Links
