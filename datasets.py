@@ -4,12 +4,24 @@
   # TODO: implement poisson-disk sampling
   # TODO: add DataSet.train.inputs, DataSet.train.outputs, DataSet.test... etc. 
 """
+
+from __future__ import absolute_import
+from __future__ import division
+from __future__ import print_function
+
 import numpy as np
 import gzip
 import os
+import tempfile
+
 import sys
 import tarfile
+import tensorflow as tf
 from six.moves import urllib
+from six.moves import xrange  # pylint: disable=redefined-builtin
+#from tensorflow.python.platform import gfile
+#from tensorflow.python.platform.default import _gfile as gfile
+
 
 ### DATASET CLASS
 class DataSet(object):
@@ -109,11 +121,11 @@ def ball(n=100, d=3, r=1, c=0):
 
 def annulus(n=100, d=3, r1=0.5, r2=2, c=0):
   """
-    Sample from an annulus / shell, where r1 is the inner radius, r2 is the outer radius
+    Uniformly sample from an annulus / shell, where r1 is the inner radius, r2 is the outer radius
   """
   x = sphere(n, d, 1).inputs
-  u = (r2-r1)*np.random.rand(n)**(1./d) + r1
-  #u = u**(1./d)
+  u = (r2-r1)/r2*np.random.rand(n) + r1/r2
+  u = r2*u**(1./d)
   return DataSet(u[:, np.newaxis]*x + c)
 
 def torus(n=100, d=2, r=1, c=0):
@@ -134,12 +146,40 @@ def torus_annulus(n=100, d=3, r1=0.5, r2=2, c=0):
     x.append(annulus(n, 2, r1, r2, c).inputs)
   return DataSet(np.concatenate(x, axis=1))
 
+def xor_full(n=100):
+  ''' like xor, but full quadrants intsead of single points '''
+  split = np.array_split(np.arange(n), 4)
+  inputs = np.random.rand(n, 2)
+  inputs[split[0], :] += np.array([[ 0,  0]])
+  inputs[split[1], :] += np.array([[-1, -1]])
+  inputs[split[2], :] += np.array([[-1,  0]])
+  inputs[split[3], :] += np.array([[ 0, -1]])
+  outputs = np.zeros_like(inputs)
+  outputs[split[0],0] = 1
+  outputs[split[1],0] = 1
+  outputs[split[2],1] = 1
+  outputs[split[3],1] = 1
+  return DataSet(inputs, outputs)
+
 def xor_data():
   inputs = np.array([[1, 1], [1, -1], [-1, -1], [-1, 1]]).astype('float32')
   outputs = np.array([[1], [-1], [1], [-1]]).astype('float32')
   return DataSet(inputs, outputs)
 
-# def spiral(n=100, d=2, r=1, ):
+def spiral(n=100, r=2., s=3.):
+  ''' spiral dataset '''
+  split = np.array_split(np.arange(n), 2)
+  # u = (r2-r1)/r2*np.random.rand(n) + r1/r2 
+  u = np.random.rand(n)
+  u = s*2*np.pi*u**(1./2.)
+  r = r*u/s/2/np.pi
+  i1 = r[split[0], np.newaxis]*np.vstack((np.cos(u[split[0]]), np.sin(u[split[0]]))).T
+  i2 = r[split[1], np.newaxis]*np.vstack((-np.cos(u[split[1]]), -np.sin(u[split[1]]))).T
+  inputs = np.concatenate((i1, i2), axis=0)
+  outputs = np.zeros_like(inputs)
+  outputs[split[0], 0] = 1
+  outputs[split[1], 1] = 1
+  return DataSet(inputs, outputs)
 
 
 
@@ -150,7 +190,6 @@ def mnist_data():
   return DataSet(mnist.train.images, mnist.train.labels)
 
 def mnist_data_test():
-  # TODO: make dataset class have both train and test...
   from tensorflow.examples.tutorials.mnist import input_data
   mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
   return DataSet(mnist.test.images, mnist.test.labels)
@@ -175,32 +214,17 @@ def cifar10_data_test():
   outputs = one_hotify(outputs)
   return DataSet(inputs, outputs)
 
+
+
+
 ### HELPER FUNCTIONS
-# TODO: make part of DataSet class.
 def unpickle(file):
+  """because nobody likes pickles"""
   import cPickle
   fo = open(file, 'rb')
   dict = cPickle.load(fo)
   fo.close()
   return dict
-
-def maybe_download_and_extract(data_url):
-  """ From tensorflow cifar10 tutorial """
-  dest_directory = './cifar10_data'
-  if not os.path.exists(dest_directory):
-    os.makedirs(dest_directory)
-  filename = data_url.split('/')[-1]
-  filepath = os.path.join(dest_directory, filename)
-  if not os.path.exists(filepath):
-    def _progress(count, block_size, total_size):
-      sys.stdout.write('\r>> Downloading %s %.1f%%' % (filename,
-          float(count * block_size) / float(total_size) * 100.0))
-      sys.stdout.flush()
-    filepath, _ = urllib.request.urlretrieve(data_url, filepath, _progress)
-    print()
-    statinfo = os.stat(filepath)
-    print('Successfully downloaded', filename, statinfo.st_size, 'bytes.')
-    tarfile.open(filepath, 'r:gz').extractall(dest_directory)
 
 def combine_data(data):
   """
@@ -213,6 +237,12 @@ def combine_data(data):
     return DataSet(inputs, outputs)
   else:
     return DataSet(inputs)
+
+def combine_and_label(datalist):
+  """
+    same as comebine_data but assigns one-hot output labels based on which dataset the data came from
+  """
+  return None
 
 def one_hotify(vector):
   """
@@ -233,4 +263,124 @@ def un_hotify(vector):
      gets converted into [1, 3]
   """
   return np.nonzero(vector)[1].astype('float64')
+
+def maybe_download_and_extract(data_url):
+  """ From tensorflow cifar10 tutorial """
+  dest_directory = './cifar10_data'
+  if not os.path.exists(dest_directory):
+    os.makedirs(dest_directory)
+  filename = data_url.split('/')[-1]
+  filepath = os.path.join(dest_directory, filename)
+  if not os.path.exists(filepath):
+    def _progress(count, block_size, total_size):
+      sys.stdout.write('\r>> Downloading %s %.1f%%' % (filename,
+          float(count * block_size) / float(total_size) * 100.0))
+      sys.stdout.flush()
+    filepath, _ = urllib.request.urlretrieve(data_url, filepath, _progress)
+    print()
+    statinfo = os.stat(filepath)
+    print('Successfully downloaded', filename, statinfo.st_size, 'bytes.')
+    tarfile.open(filepath, 'r:gz').extractall(dest_directory)
+
+
+
+
+# def maybe_download(filename, work_directory, source_url):
+#   """From tensorflow mnist tutorial """
+#   """Download the data from source url, unless it's already here."""
+#   if not tf.gfile.Exists(work_directory):
+#     tf.gfile.MakeDirs(work_directory)
+#   filepath = os.path.join(work_directory, filename)
+#   if not tf.gfile.Exists(filepath):
+#     with tempfile.NamedTemporaryFile() as tmpfile:
+#       temp_file_name = tmpfile.name
+#       urllib.request.urlretrieve(source_url, temp_file_name)
+#       tf.gfile.Copy(temp_file_name, filepath)
+#       with tf.gfile.GFile(filepath) as f:
+#         size = f.Size()
+#       print('Successfully downloaded', filename, size, 'bytes.')
+#   return filepath
+
+# def _read32(bytestream):
+#   dt = np.dtype(np.uint32).newbyteorder('>')
+#   return np.frombuffer(bytestream.read(4), dtype=dt)[0]
+
+# def extract_images(filename):
+#   """Extract the images into a 4D uint8 numpy array [index, y, x, depth]."""
+#   #print('Extracting', filename)
+#   with tf.gfile.Open(filename, 'rb') as f, gzip.GzipFile(fileobj=f) as bytestream:
+#     magic = _read32(bytestream)
+#     if magic != 2051:
+#       raise ValueError(
+#           'Invalid magic number %d in MNIST image file: %s' %
+#           (magic, filename))
+#     num_images = _read32(bytestream)
+#     rows = _read32(bytestream)
+#     cols = _read32(bytestream)
+#     buf = bytestream.read(rows * cols * num_images)
+#     data = np.frombuffer(buf, dtype=np.uint8)
+#     data = data.reshape(num_images, rows, cols, 1)
+#     return data
+
+# def extract_labels(filename, one_hot=False, num_classes=10):
+#   """Extract the labels into a 1D uint8 numpy array [index]."""
+#   #print('Extracting', filename)
+#   with tf.gfile.Open(filename, 'rb') as f, gzip.GzipFile(fileobj=f) as bytestream:
+#     magic = _read32(bytestream)
+#     if magic != 2049:
+#       raise ValueError(
+#           'Invalid magic number %d in MNIST label file: %s' %
+#           (magic, filename))
+#     num_items = _read32(bytestream)
+#     buf = bytestream.read(num_items)
+#     labels = np.frombuffer(buf, dtype=np.uint8)
+#     if one_hot:
+#       return dense_to_one_hot(labels, num_classes)
+#     return labels
+
+# SOURCE_URL = 'http://yann.lecun.com/exdb/mnist/'
+
+# def read_data_sets(train_dir, validation_size=5000, one_hot=False):
+#   def int_to_float(images):
+#     images = images.astype(np.float32)
+#     return np.multiply(images, 1.0 / 255.0)
+#   class DataSets(object):
+#     pass
+#   data_sets = DataSets()
+
+#   TRAIN_IMAGES = 'train-images-idx3-ubyte.gz'
+#   TRAIN_LABELS = 'train-labels-idx1-ubyte.gz'
+#   TEST_IMAGES = 't10k-images-idx3-ubyte.gz'
+#   TEST_LABELS = 't10k-labels-idx1-ubyte.gz'
+
+#   local_file = maybe_download(TRAIN_IMAGES, train_dir, SOURCE_URL + TRAIN_IMAGES)
+#   train_images = extract_images(local_file)
+
+#   local_file = maybe_download(TRAIN_LABELS, train_dir, SOURCE_URL + TRAIN_LABELS)
+#   train_labels = extract_labels(local_file, one_hot=one_hot)
+
+#   local_file = maybe_download(TEST_IMAGES, train_dir, SOURCE_URL + TEST_IMAGES)
+#   test_images = extract_images(local_file)
+
+#   local_file = maybe_download(TEST_LABELS, train_dir, SOURCE_URL + TEST_LABELS)
+#   test_labels = extract_labels(local_file, one_hot=one_hot)
+
+#   train_images = int_to_float(train_images)
+#   test_images = int_to_float(test_images)
+
+#   validation_images = train_images[:validation_size]
+#   validation_labels = train_labels[:validation_size]
+#   train_images = train_images[validation_size:]
+#   train_labels = train_labels[validation_size:]
+
+#   data_sets.train_images = train_images
+#   data_sets.train_labels = train_labels
+
+#   data_sets.validation_images = validation_images
+#   data_sets.validation_labels = validation_labels
+
+#   data_sets.test_images = test_images
+#   data_sets.test_labels = test_labels
+
+#   return data_sets
 

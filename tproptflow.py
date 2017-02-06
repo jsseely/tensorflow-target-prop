@@ -1,15 +1,14 @@
 """
   tensorflow implementation of difference target propagation
 """
-
 import os
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 import tensorflow as tf
-from toy_data import *
-sys.path.insert(0, '/Users/jeff/Documents/Python/_projects/tdadl/')
+import datasets as ds
+import operations as ops
 
 def make_dir(path):
   """
@@ -21,28 +20,38 @@ def make_dir(path):
     if not os.path.isdir(path):
       raise
 
-def run_tprop(batch_size=100,
+def train_net(batch_size=100,
               t_steps=100,
-              layers=5,
+              l_dim=8*[240],
               alpha=0.1,
               beta0=0.,
               beta1=1.,
               beta2=0.,
               noise_str=0.5,
               learning_rate=0.01,
-              dtp_method=1,
+              err_alg=1,
+              mode='autoencoder',
+              dataset='mnist',
+              preprocess=False,
               return_sess=False):
   """
-    TODO:
-      so much
-
     Args:
       batch_size: batch size
       t_steps: number of training steps
-      layers: number of layers in the network
+      l_dim: list of network architecture / dimension of 'hidden' layers, not including input and output layer.
       alpha: in (0,1], scaling for top layer target;  x_tar[-1] = x[-1] - alpha*(dL/dx[-1])
-      beta: regularization constant
-      dtp_method: 1 or 2. 1 for Lee implementation, 2 for new implementation
+      beta0: regularization constant
+      beta1: regularization constant
+      beta2: regularization constant
+      noise_str: value of standard dev of noise injected into neurons, but only for the L_inv loss functions, and for t_step=0 (decays through training)
+      learning_rate: learning rate for optimization
+      err_alg: error propagation method. 0 for difference target prop. 1 for regularized target prop. 2 for reg target prop with learnable inverses.
+      mode: 'autoencoder' or 'classification'
+      dataset: 'mnist' or 'cifar'
+      preprocess: bool. PCA+whiten the data? Good for cifar but whatevs for mnist
+      return_sess: should we return the tf session?
+    Returns:
+      sess: the tf session if return_sess is True
   """
 
   # Params from conti_dtp.py -- unclear if this is one hyperparam search or the optimal one
@@ -50,22 +59,30 @@ def run_tprop(batch_size=100,
   # 0.327736332653, 0.0148893490317, 0.00501149118237, 0.359829566008
 
   ### DATA
-  data = mnist_data()
-  data_test = mnist_data_test()
-  #data = xor_data()
+  if dataset == 'cifar':
+    data = ds.cifar10_data()
+    data_test = ds.cifar10_data_test()
+  elif dataset == 'mnist':
+    data = ds.mnist_data()
+    data_test = ds.mnist_data_test()
 
-  ### MODEL PARAMETERS
-  # Layer naming convention
-  # Layer 0: input vector space
-  # Layer P: output vector space (same dimension as data.output)
-  # Convention: "layers = P", so that len(l_dim)=P+1
-  # The loss computes the error between x and y at layer P. The loss is not considered its own 'layer' 
+  if preprocess:
+    from sklearn.decomposition import PCA
+    pca = PCA(n_components=1000, whiten=True)
+    data.inputs = pca.fit_transform(data.inputs)
+    data_test.inputs = pca.transform(data_test.inputs)
+
+  # autoencoderify
+  if mode == 'autoencoder':
+    data.outputs = data.inputs
+    data_test.outputs = data_test.inputs
 
   m_dim = data.inputs.shape[1]
   p_dim = data.outputs.shape[1]
 
-  l_dim = [m_dim] + (layers-1)*[100] + [p_dim]
-  stddev = 0.05 # noise for weight inits
+  l_dim = [m_dim] + l_dim + [p_dim]
+  layers = len(l_dim)-1
+
   b_init = 0.0 # init for bias terms
 
   ### MODEL
@@ -74,6 +91,7 @@ def run_tprop(batch_size=100,
   np.random.seed(1234)
 
   # placeholders
+  # put placeholders in variable scopes...
   x_in = tf.placeholder(tf.float32, shape=[None, m_dim], name='x_in') # Input
   y = tf.placeholder(tf.float32, shape=[None, p_dim], name='y') # Output
   epoch = tf.placeholder(tf.float32, shape=None, name='epoch') # training iteration
@@ -99,7 +117,9 @@ def run_tprop(batch_size=100,
   eps = (layers+1)*[None] # noise in L_inv term
   eps0 = (layers+1)*[None] # noise in L_inv term
   eps1 = (layers+1)*[None] # noise in L_inv term
-  scope = (layers+1)*[None] # store some scopes!
+  vscope = (layers+1)*[None] # store some scopes!
+  nscope = (layers+1)*[None] # store some scopes!
+
   
   train_op_inv = (layers+1)*[None]
   train_op_L = (layers+1)*[None]
@@ -110,11 +130,18 @@ def run_tprop(batch_size=100,
     low = -np.sqrt(6.0/(l_dim[l-1] + l_dim[l]))
     high = np.sqrt(6.0/(l_dim[l-1] + l_dim[l]))
     W[l] = np.random.uniform(low=low, high=high, size=(l_dim[l-1], l_dim[l])).astype('float32')
-    #W[l] = linalg.orth(W[l]) # works because l_dim[l-1] > l_dim[l]
+    if l_dim[l-1] >= l_dim[l]:
+      W[l] = 0.95*linalg.orth(W[l])
+
+  # keep or remove?
+  if mode == 'autoencoder':
+    for l in range(layers/2+1, layers+1):
+      W[l] = W[layers+1-l].T
+
   for l in range(layers, 1, -1):
-    if dtp_method==0 or dtp_method==1:
+    if err_alg==0 or err_alg==1:
       V[l] = np.linalg.pinv(W[l])
-    if dtp_method==2:
+    if err_alg==2:
       pinv = np.linalg.pinv(W[l])
       V[l] = np.concatenate((pinv, np.eye(l_dim[l-1]) - np.dot(W[l], pinv)), axis=0).astype('float32')
 
@@ -127,114 +154,131 @@ def run_tprop(batch_size=100,
   # tf.contrib.layers.variance_scaling_initializer(factor=1.0, mode='FAN_AVG', uniform=True)
   
   for l in range(1, layers+1):
-    with tf.variable_scope('Layer'+str(l)) as scope[l]:
-      b[l] = tf.get_variable( 'b', shape=[1, l_dim[l]], initializer=tf.constant_initializer(b_init))
-      #W[l] = tf.get_variable( 'W', shape=[l_dim[l-1], l_dim[l]], initializer=W[l])
-      W[l] = tf.get_variable( 'W', initializer=W[l])
+    with tf.variable_scope('Layer'+str(l)) as vscope[l]:
+      with tf.name_scope('Ops') as nscope[l]: # scoping ... 
+        b[l] = tf.get_variable( 'b', shape=[1, l_dim[l]], initializer=tf.constant_initializer(b_init))
+        #W[l] = tf.get_variable( 'W', shape=[l_dim[l-1], l_dim[l]], initializer=W[l])
+        W[l] = tf.get_variable( 'W', initializer=W[l])
   # Feedback graph
   for l in range(layers, 1, -1):
-    with tf.variable_scope('Layer'+str(l)):
-      if dtp_method==0 or dtp_method==1:
+    with tf.variable_scope(vscope[l]):
+      if err_alg==0 or err_alg==1:
         c[l] = tf.get_variable( 'c', shape=[1, l_dim[l-1]], initializer=tf.constant_initializer(b_init))
         #V[l] = tf.get_variable( 'V', shape=[l_dim[l], l_dim[l-1]], initializer=V[l])
         V[l] = tf.get_variable( 'V', initializer=V[l])
-      if dtp_method==2:
+      if err_alg==2:
         c[l] = tf.get_variable( 'c', shape=[1, l_dim[l-1]],  initializer=tf.constant_initializer(b_init))
         #V[l] = tf.get_variable( 'V', shape=[l_dim[l]+l_dim[l-1], l_dim[l-1]], initializer=V[l])
         V[l] = tf.get_variable( 'V', initializer=V[l])
 
   # Feedforward functions
-  def f(layer, inp, act=tf.nn.tanh):
-    """map from layer layer-1 to layer; inp is the inp"""
-    with tf.variable_scope('Layer'+str(layer), reuse=True):
-      W_ = tf.get_variable( 'W' )
-      b_ = tf.get_variable( 'b' )
-    return act(tf.matmul(inp, W_) + b_, name='f'+str(layer))
+  def f(layer, x_in, act=tf.nn.tanh):
+    """map from layer layer-1 to layer; x_in is the x_in"""
+    with tf.name_scope(nscope[layer]):
+      return act(tf.add(tf.matmul(x_in, W[layer], name='x1'), b[layer], name='x2'), name='x3')
 
   # Feedback functions
-  def g(layer, inp, act=tf.nn.tanh):
-    with tf.variable_scope('Layer'+str(layer), reuse=True):
-      V_ = tf.get_variable( 'V' )
-      c_ = tf.get_variable( 'c' )
-    return act(tf.matmul(inp, V_) + c_, name='g'+str(layer))
+  def g(layer, x_target, act=tf.nn.tanh):
+    with tf.name_scope(nscope[layer]):
+      return act(tf.add(tf.matmul(x_target, V[layer], name='x3_'), c[layer], name='x2_'), name='x1_')
 
-  def g_full(layer, input1, input2, act=tf.nn.tanh):
-    """ generalized g. g(x_[layer], x[layer-1]) -> x_[layer-1] """
-    with tf.variable_scope('Layer'+str(layer), reuse=True):
-      V_ = tf.get_variable( 'V' )
-      c_ = tf.get_variable( 'c' )
-    return act(tf.matmul(tf.concat( 1, [input1, input2] ), V_) + c_, name='g_full'+str(layer))
+  def g_dtp(layer, x1_target, x1_activation, x0_activation, act=tf.nn.tanh):
+    with tf.name_scope(nscope[layer]):
+      return tf.sub(x0_activation,
+                    tf.add(act(tf.add(tf.matmul(x1_target,     V[layer], name='x3_'), c[layer], name='x2_'), name='x1_'),
+                           act(tf.add(tf.matmul(x1_activation, V[layer], name='x3_'), c[layer], name='x2_'), name='x1_')), name='x_target')
 
-  def g_full2(layer, input1, input2, input3, act=tf.nn.tanh):
-    """ generalized g. g(x_[layer], x[layer-1]) -> x_[layer-1] """
-    with tf.variable_scope('Layer'+str(layer), reuse=True):
-      V_ = tf.get_variable( 'V' )
-      c_ = tf.get_variable( 'c' )
-    return act(tf.matmul(tf.concat( 1, [input1, input2, input3] ), V_) + c_, name='g_full'+str(layer))
+  def g_rinv(layer, x1_target, x0_activation):
+    with tf.name_scope(nscope[layer]):
+      relu_inv = tf.py_func(ops.relu().f_inv, [x1_target, x0_activation], [tf.float32], name='x3_')[0]
+      add_inv = tf.sub(relu_inv, b[layer], name='x2_')
+      return tf.py_func(ops.linear().f_inv, [add_inv,  x0_activation, W[layer]], [tf.float32], name='x1_')[0]
+
+  # TESTING
+  # def g_full(layer, input1, input2, act=tf.nn.tanh):
+  #   """ generalized g. g(x_[layer], x[layer-1]) -> x_[layer-1] """
+  #   with tf.name_scope(scope[l]):
+  #     V[layer] = tf.get_variable( 'V' )
+  #     c[layer] = tf.get_variable( 'c' )
+  #     return act(tf.matmul(tf.concat( 1, [input1, input2] ), V[layer]) + c[layer], name='g_full')
+
+  # def g_full2(layer, input1, input2, input3, act=tf.nn.tanh):
+  #   """ generalized g. g(x_[layer], x[layer-1]) -> x_[layer-1] """
+  #   with tf.name_scope('Layer'):
+  #     V[layer] = tf.get_variable( 'V' )
+  #     c[layer] = tf.get_variable( 'c' )
+  #   return act(tf.matmul(tf.concat( 1, [input1, input2, input3] ), V[layer]) + c[layer], name='g_full')
+  # /TESTING
 
   # Forward propagation
   x[0] = x_in
   # all but top layer uses tanh
-  act = tf.nn.tanh
+  act = tf.nn.relu
   for l in range(1, layers):
     x[l] = f(l, x[l-1], act)
-  # top layer uses softmax
-  x[layers] = f(layers, x[layers-1], tf.nn.softmax)
+  if mode == 'classification':
+    # top layer uses softmax
+    x[layers] = f(layers, x[layers-1], tf.nn.softmax)
+  elif mode == 'autoencoder':
+    x[layers] = f(layers, x[layers-1], act)
 
   # Top layer loss / top layer target
-  # L[-1] = tf.reduce_mean(-tf.reduce_sum(y*tf.log(x[-1]), reduction_indices=[1]), name='global_loss')
-  # L[-1] = tf.nn.softmax_cross_entropy_with_logits(x[-1], y)
-  # x_[-1] = tf.identity(x[-1] - alpha*tf.gradients(L[-1], [x[-1]])[0], name='xtar'+str(layers))
-  
-  # debugging, use mse?
-  L[-1] = tf.reduce_mean(-tf.reduce_sum(y*tf.log(x[-1]), reduction_indices=[1]), name='global_loss')
-  #L[-1] = tf.reduce_mean(0.5*(x[-1] - y)**2, name='global_loss')
-  x_[-1] = x[-1] - alpha*(x[-1] - y)
+  with tf.name_scope(nscope[-1]):
+    # L[-1] = tf.nn.softmax_cross_entropy_with_logits(x[-1], y)  
+    if mode == 'classification':
+      L[-1] = tf.reduce_mean(-tf.reduce_sum(y*tf.log(x[-1]), reduction_indices=[1]), name='global_loss')
+    elif mode == 'autoencoder':
+      L[-1] = tf.reduce_mean(0.5*(x[-1] - y)**2, name='global_loss')
+    x_[-1] = tf.sub(x[-1], alpha*(x[-1] - y), name='x_target') 
 
   # Feedback propagation
   # TODO: get `targets` for backprop, for comparison.
   for l in range(layers, 1, -1):
-    if dtp_method==0:
-      # vanilla target prop
-      x_[l-1] = g(l, x_[l], act)
-    if dtp_method==1:
-      # difference target prop
-      x_[l-1] = x[l-1] - g(l, x[l], act) + g(l, x_[l], act)
-    if dtp_method==2:
-      # regularized target prop
-      x_[l-1] = g_full(l, x_[l], x[l-1], act)
+    if err_alg==0:
+      x_[l-1] = g_dtp(l, x_[l], x[l], x[l-1], act)
+    if err_alg==1:
+      x_[l-1] = g_rinv(l, x_[l], x[l-1])
 
   # Errors for loss functions
-  if dtp_method==1 or dtp_method==2:
+  if err_alg==0 or err_alg==2:
     for l in range(1, layers+1):
-      eps[l]  = noise_inj*tf.random_normal(tf.shape(x[l]), mean=0, stddev=1., name='eps'+str(l-1)) # uh, tf.shape(x[l-1]) right?
-      eps0[l] = noise_inj*tf.random_normal(tf.shape(x[l]), mean=0, stddev=1., name='eps0'+str(l-1)) # uh, tf.shape(x[l-1]) right?
-      eps1[l] = noise_inj*tf.random_normal(tf.shape(x[l]), mean=0, stddev=1., name='eps1'+str(l-1)) # uh, tf.shape(x[l-1]) right?
+      with tf.name_scope(nscope[l]):
+        eps[l]  = noise_inj*tf.random_normal(tf.shape(x[l]), mean=0, stddev=1., name='eps'+str(l-1)) # uh, tf.shape(x[l-1]) right?
+        eps0[l] = noise_inj*tf.random_normal(tf.shape(x[l]), mean=0, stddev=1., name='eps0'+str(l-1)) # uh, tf.shape(x[l-1]) right?
+        eps1[l] = noise_inj*tf.random_normal(tf.shape(x[l]), mean=0, stddev=1., name='eps1'+str(l-1)) # uh, tf.shape(x[l-1]) right?
   # Loss functions
   for l in range(1, layers): # FOR NOW; LAYERS+1, BUT SHOULD BE LAYERS
-    L[l] = tf.reduce_mean(0.5*(x[l] - x_[l])**2, name='L'+str(l))
+    with tf.name_scope(nscope[l]):
+      L[l] = tf.reduce_mean(0.5*(x[l] - x_[l])**2, name='L'+str(l))
   for l in range(2, layers+1):
-    if dtp_method==0 or dtp_method==1:
-      L_inv[l] = tf.reduce_mean(0.5*(g(l, f(l, x[l-1]+eps[l-1], act), act) - (x[l-1]+eps[l-1]))**2, name='L_inv'+str(l))
-    if dtp_method==2:
-      # L_inv0 - g as left inverse of f; regardless of what x_0 is, g should send f(x) to x. just use, for now, the activation x+eps
-      L_inv0[l] = tf.reduce_mean(0.5*(g_full(l, f(l, x[l-1]+eps0[l-1], act), x[l-1], act) - (x[l-1]+eps0[l-1]))**2, name='L_inv0')
-      # L_inv1 - g as the right invers of f; regardless of what x_0 is, f should send g(y) to y; make sure to use x_targ as y because that's what matters
-      L_inv1[l] = tf.reduce_mean(0.5*(f(l, g_full(l, x_[l]+eps1[l], x[l-1], act), act) - (x_[l]+eps1[l]))**2, name='L_inv1')
-      # L_inv2 - g should send y close to x_0
-      L_inv2[l] = tf.reduce_mean(0.5*(g_full(l, x_[l], x[l-1], act) - x[l-1])**2, name='L_inv2')
-      L_inv[l] = beta0*L_inv0[l] + beta1*L_inv1[l] + beta2*L_inv2[l]
-      # L_inv[l] = tf.add(L_inv1[l], beta*L_inv2[l], name='L_inv')
-      # L_inv[l] = tf.add(tf.reduce_mean(0.5*(f(l, g_full(l, x_[l]+eps[l], x[l], x[l-1])) - x_[l]-eps[l])**2), beta*tf.reduce_mean(0.5*(g_full(l, x_[l], x[l], x[l-1]) - x[l-1])**2), name='L_inv') # triple check -- where to put beta, where to put reduce_means? 
+    with tf.name_scope(nscope[l]):
+      if err_alg==0:
+        L_inv[l] = tf.reduce_mean(0.5*(g(l, f(l, x[l-1]+eps[l-1], act), act) - (x[l-1]+eps[l-1]))**2, name='L_inv')
+      if err_alg==1:
+        pass
+      if err_alg==2:
+        # STILL TESTING
+        # L_inv0 - g as left inverse of f; regardless of what x_0 is, g should send f(x) to x. just use, for now, the activation x+eps
+        L_inv0[l] = tf.reduce_mean(0.5*(g_full(l, f(l, x[l-1]+eps0[l-1], act), x[l-1], act) - (x[l-1]+eps0[l-1]))**2, name='L_inv0')
+        # L_inv1 - g as the right inverse of f; regardless of what x_0 is, f should send g(y) to y; make sure to use x_targ as y because that's what matters
+        L_inv1[l] = tf.reduce_mean(0.5*(f(l, g_full(l, x_[l]+eps1[l], x[l-1], act), act) - (x_[l]+eps1[l]))**2, name='L_inv1')
+        # L_inv2 - g should send y close to x_0
+        L_inv2[l] = tf.reduce_mean(0.5*(g_full(l, x_[l], x[l-1], act) - x[l-1])**2, name='L_inv2')
+        L_inv[l] = beta0*L_inv0[l] + beta1*L_inv1[l] + beta2*L_inv2[l]
+        # L_inv[l] = tf.add(L_inv1[l], beta*L_inv2[l], name='L_inv')
+        # L_inv[l] = tf.add(tf.reduce_mean(0.5*(f(l, g_full(l, x_[l]+eps[l], x[l], x[l-1])) - x_[l]-eps[l])**2), beta*tf.reduce_mean(0.5*(g_full(l, x_[l], x[l], x[l-1]) - x[l-1])**2), name='L_inv') # triple check -- where to put beta, where to put reduce_means? 
 
   # Optimizers
   #opt = tf.train.AdamOptimizer(0.001)
   #opt = tf.train.GradientDescentOptimizer(learning_rate)
   # gate_gradients=tf.train.AdamOptimizer(0.001).GATE_NONE # yo, whats this?
   for l in range(1, layers+1):
-    train_op_L[l] = tf.train.RMSPropOptimizer(learning_rate, name='Opt'+str(l)).minimize(L[l], var_list=[W[l], b[l]])
+    with tf.name_scope(nscope[l]):
+      train_op_L[l] = tf.train.RMSPropOptimizer(learning_rate, name='Opt').minimize(L[l], var_list=[W[l], b[l]])
   for l in range(2, layers+1):
-    train_op_inv[l] = tf.train.RMSPropOptimizer(learning_rate, name='Opt_inv'+str(l)).minimize(L_inv[l], var_list=[V[l], c[l]])
+    with tf.name_scope(nscope[l]):
+      if err_alg==0 or err_alg==2:
+        train_op_inv[l] = tf.train.RMSPropOptimizer(learning_rate, name='Opt_inv').minimize(L_inv[l], var_list=[V[l], c[l]])
 
   # Backprop. for reference
   #train_bp = opt.minimize(L[-1], var_list=[i for i in W+b if i is not None])
