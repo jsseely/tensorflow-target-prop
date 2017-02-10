@@ -2,12 +2,78 @@
   A simple Operation class. 
   For a function y=f(x), f: Rn -> Rm we associate three separate ways to define an 
   'inverse' of f, such that x_new = f_inv(y)
-
-  TODO: implement numpy and tf versions separately
 """
 
 import numpy as np
 from scipy.optimize import fmin
+import tensorflow as tf
+
+def tf_rinv(y, x_0, func, func_inv, gamma=1e-2):
+  y = y.astype('float32')
+  x_0 = x_0.astype('float32')
+  g = tf.Graph()
+  with g.as_default():
+    x_val = func_inv(y, x_0, th=1e-4)+ 0.01*np.random.randn(*x_0.shape)
+    x = tf.Variable(x_val)
+    L = tf.reduce_mean(tf.reduce_sum((func(x) - y)**2 + gamma*(x - x_0)**2, axis=1))
+    opt = tf.train.AdamOptimizer(0.1).minimize(L)
+    fdiff = np.inf
+    xdiff = np.inf
+    with tf.Session() as sess:
+      sess.run(tf.global_variables_initializer())
+      f_val = sess.run(L) 
+      counter = 0
+      while (fdiff > 1e-4 or xdiff > 1e-4) or counter > 300:
+        counter += 1
+        sess.run(opt)
+        f_val_, x_val_ = sess.run([L, x])
+        fdiff = np.abs(f_val-f_val_)
+        xdiff = np.max(np.linalg.norm(x_val - x_val_, axis=1, keepdims=True))
+        x_val = x_val_
+        f_val = f_val_
+      return x_val
+
+def fmin_rinv(y, x_0, func, func_inv, gamma=1e-2):
+  def cost(x, y, x_0):
+    return np.sum((func(x) - y)**2 + gamma*(x - x_0)**2, axis=1)
+  x = func_inv(y, x_0, th=1e-2)
+  for i in range(y.shape[0]):
+    x[i] = fmin(cost, x[i], args=(y[i, np.newaxis], x_0[i, np.newaxis]), xtol=1e-4, ftol=1e-4, maxiter=50, disp=0)
+
+# this implementation didn't work really...
+def tf_rinv_NOPE(y, x_0, func, func_inv, gamma=1e-2):
+  y = y.astype('float32')
+  x_0 = x_0.astype('float32')
+  x_init = func_inv(y, x_0, th=1e-4) 
+  x_out = np.zeros_like(x_0)
+  g = tf.Graph()
+  with g.as_default():
+    tf.reset_default_graph()
+    x   = (x_0.shape[0])*[None]
+    L   = (x_0.shape[0])*[None]
+    opt = (x_0.shape[0])*[None]
+    for n in range(x_0.shape[0]):
+      x[n] = tf.Variable(x_init[n,:,None])
+      L[n] = tf.reduce_sum((func(x[n]) - y[n,:,None])**2 + gamma*(x[n] - x_0[n,:,None])**2)
+      opt[n] = tf.train.RMSPropOptimizer(0.01).minimize(L[n], var_list=[x[n]])
+    with tf.Session() as sess:
+      sess.run(tf.global_variables_initializer())
+      for n in range(x_0.shape[0]):
+        fdiff = np.inf
+        xdiff = np.inf
+        x_val = sess.run(x[n])
+        f_val = sess.run(L[n]) 
+        counter = 0
+        while fdiff > 1e-2 or xdiff > 1e-2:
+          counter += 1
+          sess.run(opt[n])
+          f_val_, x_val_ = sess.run([L[n], x[n]])
+          fdiff = np.abs(f_val-f_val_)
+          xdiff = np.linalg.norm(x_val - x_val_, axis=1, keepdims=True)
+          x_val = x_val_
+          f_val = f_val_
+        x_out[n] = x_val
+  return x_out
 
 class Op(object):
   def __init__(self, f, df, f_inv, f_rinv):
@@ -85,13 +151,7 @@ def sigmoid():
     y = np.piecewise(y, [y <= th, y > th, y >= (1 - th)], [th, lambda y_: y_, 1 - th])
     return -np.log(1./y - 1.)
   def f_rinv(y, x_0, gamma=1e-2):
-    # extremely inefficient, but can be used for experimentation 
-    def cost(x, y, x_0):
-      return np.sum((f(x) - y)**2 + gamma*(x - x_0)**2, axis=1)
-    x = f_inv(y, x_0, th=1e-2)
-    for i in range(y.shape[0]):
-      x[i] = fmin(cost, x[i], args=(y[i, np.newaxis], x_0[i, np.newaxis]), xtol=1e-4, ftol=1e-4, maxiter=50, disp=0)
-    return x
+    return tf_rinv(y, x_0, tf.nn.sigmoid, f_inv, gamma=gamma)
   return Op(f, df, f_inv, f_rinv)
 
 def tanh():
@@ -103,13 +163,7 @@ def tanh():
     y = np.piecewise(y, [y <= (-1+th), y > (-1+th), y >= (1-th)], [-1+th, lambda y_: y_, 1-th])
     return 0.5*np.log((1. + y)/(1. - y))
   def f_rinv(y, x_0, gamma=1e-2):
-    # extremely inefficient, but can be used for experimentation 
-    def cost(x, y, x_0):
-      return np.sum((f(x) - y)**2 + gamma*(x - x_0)**2, axis=1)
-    x = f_inv(y, x_0, th=1e-2)
-    for i in range(y.shape[0]):
-      x[i] = fmin(cost, x[i], args=(y[i, np.newaxis], x_0[i, np.newaxis]), xtol=1e-4, ftol=1e-4, maxiter=50, disp=0)
-    return x
+    return tf_rinv(y, x_0, tf.nn.tanh, f_inv, gamma=gamma)
   return Op(f, df, f_inv, f_rinv)
 
 def relu():
@@ -166,9 +220,15 @@ def addition():
     return (y - b + gamma*x_0)/(1. + gamma)
   return Op(f, df, f_inv, f_rinv)
 
-# def softmax():
-#   def f(x):
-#     return np.exp(x)/np.sum(np.exp(x), axis=1, keepdims=True)
-#   def df(y, x):
-#     J = np.
-#     return np.dot(  )
+def identity():
+  def f(x):
+    return x
+  def df(y, x=None):
+    return y
+  def f_inv(y, x_0):
+    return y
+  def f_rinv(y, x_0, gamma=1e-2):
+    # actual rinv not implemented...
+    return y
+  return Op(f, dr, f_inv, f_rinv)
+

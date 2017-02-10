@@ -1,3 +1,3 @@
 # clear old files. 
-rm -f /vega/zmbbi/users/jss2219/targprop/error/*
-rm -f /vega/zmbbi/users/jss2219/targprop/output/*
+rm -f /rigel/home/jss2219/tensorflow-target-prop/slurmerr/*
+rm -f /rigel/home/jss2219/tensorflow-target-prop/slurmout/*
