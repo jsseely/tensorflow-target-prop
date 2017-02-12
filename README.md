@@ -18,7 +18,7 @@ Files:
 
 - `targprop.operations` contain an `Op` class for implementing standard operations. Whereas tensorflow operations require both the function and its derivative, the `Op` class requires the function, its derivative,  its least-squares inverse `f_inv` and regularized least-squares inverse `f_rinv`, which are used in some target propagation methods that we test.
 
-` targprop.datasets` contain a self-explanatory `DataSet` class.
+- `targprop.datasets` contain a self-explanatory `DataSet` class.
 
 ![image](https://cloud.githubusercontent.com/assets/7425776/22864905/ce9808f8-f127-11e6-9fc2-e666b6744154.png)
 
