@@ -19,11 +19,11 @@ from targprop.tprop_train import train_net
 # Iterable parameters
 cur_params = {}
 cur_params['batch_size']        = 100
-cur_params['gamma']             = 10**np.random.uniform(-6, -1)
-cur_params['alpha_t']           = np.random.uniform(0, 1)
-cur_params['noise_str']         = 10**np.random.uniform(-4, 1)
-cur_params['learning_rate']     = 10**np.random.uniform(-6, -1)
-cur_params['learning_rate_inv'] = 10**np.random.uniform(-6, -1)
+cur_params['gamma']             = 10**np.random.uniform(-2, 1)
+cur_params['alpha_t']           = np.random.uniform(0.1, 1)
+cur_params['noise_str']         = 10**np.random.uniform(-2, 2)
+cur_params['learning_rate']     = 10**np.random.uniform(-6, -2)
+cur_params['learning_rate_inv'] = 10**np.random.uniform(-6, 1)
 
 T_STEPS = 20000
 UPDATES = 'tf'

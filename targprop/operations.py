@@ -23,7 +23,7 @@ def tf_rinv(y, x_0, func, func_inv, gamma=1e-2):
       sess.run(tf.global_variables_initializer())
       f_val = sess.run(L) 
       counter = 0
-      while (fdiff > 1e-4 or xdiff > 1e-4) or counter > 300:
+      while (fdiff > 1e-4 or xdiff > 1e-4) and counter < 300:
         counter += 1
         sess.run(opt)
         f_val_, x_val_ = sess.run([L, x])

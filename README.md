@@ -12,8 +12,15 @@ Target propagation is an alternative to backpropagation that propagates targets 
 The layer inverses can be defined explicitly or learned.
 
 Files:
-- `targprop.py` contains the numpy implementation of difference target propagation and regularized target propagation. The main function, `run_tprop()` trains a simple feedforward MNIST classifier using three different target/error propagation methods (`err_algs`) and three different weight update methods (`training_algs`). At the moment, it is still not the most user-friendly code...
-- `targproptflow.py` contains the tensorflow implementation of difference target propagation and some exploratory versions of regularized target propagation. Here, tensorflow is basically only used to apply gradient descent on the layer-local cost functions.
+- `targprop.tprop_train` contains the main implementation of target propagation. The main function, `train_net()` trains a network on `dataset=MNIST` or `dataset=cifar`, as a classifier (`mode=classification`) or autoencoder (`mode=autoencoder`), using one of a few different target propagation methods (`err_alg=0`, `1`, `2`, or `3`). This function relies primarily on numpy to do forward/backward propagation. The parameters of the model are updated based on layer-local cost functions, which can be minimized using gradient descent (`update_implementation=numpy`) or using tensorflow's Adam optimizer (`update_implementation=tf`).
+
+- `targprop.tproptflow_train` is similar to `tprop_train.py`, but the entire graph is built in tensorflow. The disadvantage of doing everything with a tensorflow graph is that it is difficult to implement new target propagation methods. 
+
+- `targprop.operations` contain an `Op` class for implementing standard operations. Whereas tensorflow operations require both the function and its derivative, the `Op` class requires the function, its derivative,  its least-squares inverse `f_inv` and regularized least-squares inverse `f_rinv`, which are used in some target propagation methods that we test.
+
+` targprop.datasets` contain a self-explanatory `DataSet` class.
+
+![image](https://cloud.githubusercontent.com/assets/7425776/22864905/ce9808f8-f127-11e6-9fc2-e666b6744154.png)
 
 -----------
 

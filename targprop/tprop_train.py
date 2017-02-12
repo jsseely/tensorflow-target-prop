@@ -1,6 +1,7 @@
 """
   target propagation.
   TODO: make sure everything is float32
+  TODO: get_variable tf initializers...
 """
 import os
 import numpy as np
@@ -23,7 +24,7 @@ def softmax(x):
   return np.exp(x-maxx)/np.sum(np.exp(x-maxx), axis=1, keepdims=True)
 def cross_entropy(y, x):
   """cross entropy"""
-  return np.sum(-y*np.log(softmax(x)), axis=1, keepdims=True).mean()
+  return np.mean(-np.sum(y*np.log(x), axis=1, keepdims=True))
 def mse(y, x):
   """mean-squared error"""
   return 0.5*np.mean((x - y)**2)
@@ -34,26 +35,37 @@ def clip(x, th):
 
 def make_tf_L(layer, W_init, b_init, lr, act=tf.nn.tanh):
   """ builds graph for layer-local training of W and b """
-  with tf.name_scope('layer'+str(layer)+'_ff'):
-    W = tf.Variable(W_init, name='W')
-    b = tf.Variable(b_init, name='b')
+  with tf.name_scope('layer'+str(layer)+'_ff') as scope:
+    # W = tf.Variable(W_init, name='W')
+    # b = tf.Variable(b_init, name='b')
+
+    W = tf.get_variable(scope+'W', shape=W_init.shape, dtype=tf.float32, initializer=tf.orthogonal_initializer(0.95))
+    b = tf.get_variable(scope+'b', shape=b_init.shape, dtype=tf.float32, initializer=tf.constant_initializer(0.))
 
     x_0 = tf.placeholder(tf.float32, shape=[None, W_init.shape[0]], name='input')
-    y = tf.placeholder(tf.float32, shape=[None, W_init.shape[1]], name='output')
+    y   = tf.placeholder(tf.float32, shape=[None, W_init.shape[1]], name='output')
     
     loss = tf.reduce_mean((act(tf.matmul(x_0, W) + b) - y)**2, name='loss') # should be, reduce_mean(reduce_sum(...))
     
     s1 = tf.summary.scalar('loss'+str(layer), loss)
-    #s2 = tf.summary.histogram('W'+str(layer), W)
-    #s3 = tf.summary.histogram('b'+str(layer), b) 
+    s2 = tf.summary.histogram('W'+str(layer), W)
+    s3 = tf.summary.histogram('b'+str(layer), b) 
     
-    return tf.train.AdamOptimizer(lr).minimize(loss, var_list=[W, b]), tf.summary.merge((s1, ))
+    opt = tf.train.AdamOptimizer(lr)
+    gvs = opt.compute_gradients(loss, var_list=[W, b])
+    sg = [tf.summary.scalar('mean_grad'+var.name[-3], tf.reduce_mean(grad)) for grad, var in gvs] # var.name = 'namescope/V:0' and we want just 'V'
+    sg += [tf.summary.scalar('norm_grad'+var.name[-3], tf.reduce_sum(grad**2)**0.5) for grad, var in gvs] # var.name = 'namescope/V:0' and we want just 'V'
+    clipped_gvs = [(tf.clip_by_norm(grad, 100.), var) for grad, var in gvs]
+    return opt.apply_gradients(clipped_gvs), tf.summary.merge([s1] + sg)
 
 def make_tf_Linv(layer, V_init, c_init, lr, act=tf.nn.tanh):
   """ builds graph for layer-local training of V and c """
-  with tf.name_scope('layer'+str(layer)+'_inv'):
-    V = tf.Variable(V_init, name='V')
-    c = tf.Variable(c_init, name='c')
+  with tf.name_scope('layer'+str(layer)+'_inv') as scope:
+    # V = tf.Variable(V_init, name='V')
+    # c = tf.Variable(c_init, name='c')
+
+    V = tf.get_variable(scope+'V', shape=V_init.shape, dtype=tf.float32, initializer=tf.orthogonal_initializer(0.95))
+    c = tf.get_variable(scope+'c', shape=c_init.shape, dtype=tf.float32, initializer=tf.constant_initializer(0.))
     
     W = tf.placeholder(tf.float32, shape=V_init.T.shape, name='W')
     b = tf.placeholder(tf.float32, shape=[1, V_init.shape[0]], name='b')
@@ -63,10 +75,15 @@ def make_tf_Linv(layer, V_init, c_init, lr, act=tf.nn.tanh):
     loss = tf.reduce_mean((act(tf.matmul(fx, V) + c) - x_0)**2, name='loss')  
     
     s1 = tf.summary.scalar('loss'+str(layer), loss)
-    #s2 = tf.summary.histogram('V'+str(layer), V)
-    #s3 = tf.summary.histogram('c'+str(layer), c) 
+    s2 = tf.summary.histogram('V'+str(layer), V)
+    s3 = tf.summary.histogram('c'+str(layer), c) 
     
-    return tf.train.AdamOptimizer(lr).minimize(loss, var_list=[V, c]), tf.summary.merge((s1, ))
+    opt = tf.train.AdamOptimizer(lr)
+    gvs = opt.compute_gradients(loss, var_list=[V, c])
+    sg = [tf.summary.scalar('mean_grad'+var.name[-3], tf.reduce_mean(grad)) for grad, var in gvs] # var.name = 'namescope/V:0' and we want just 'V'
+    sg += [tf.summary.scalar('norm_grad'+var.name[-3], tf.reduce_sum(grad**2)**0.5) for grad, var in gvs] # var.name = 'namescope/V:0' and we want just 'V'
+    clipped_gvs = [(tf.clip_by_norm(grad, 100.), var) for grad, var in gvs]
+    return opt.apply_gradients(clipped_gvs), tf.summary.merge([s1] + sg)
 
 def train_net(batch_size=100,
               t_steps=200,
@@ -221,10 +238,12 @@ def train_net(batch_size=100,
         train_op_L_inv[l], summary_ops_inv[l] = make_tf_Linv(l, V[l], c[l], learning_rate_inv, tf_act)
     
     # add some basic summaries 
+    loss_sum = tf.summary.scalar('global_loss', tf.placeholder(tf.float32, shape=None, name='global_loss_placeholder'))
     if mode == 'classification':
       acc_sum = tf.summary.scalar('accuracy', tf.placeholder(tf.float32, shape=None, name='accuracy_placeholder'))
-    loss_sum = tf.summary.scalar('global_loss', tf.placeholder(tf.float32, shape=None, name='global_loss_placeholder'))
-    global_sums = tf.summary.merge((acc_sum, loss_sum))
+      global_sums = tf.summary.merge((acc_sum, loss_sum))
+    elif mode == 'autoencoder':
+      global_sums = tf.summary.merge((loss_sum, ))
 
   # initialize activation lists
   x1 = (layers+1)*[None] # x1 = W*x3
@@ -346,7 +365,7 @@ def train_net(batch_size=100,
           sess.run(train_op_L_inv[l], feed_dict=feed_dict)
           V[l], c[l] = sess.run([nscope+'V:0', nscope+'c:0'])
           
-          if t % 200 == 0: # tensorboard
+          if t % 100 == 0: # tensorboard
               summary_str = sess.run(summary_ops_inv[l], feed_dict=feed_dict)
               summary_writer.add_summary(summary_str, t)
         
@@ -357,12 +376,12 @@ def train_net(batch_size=100,
         sess.run(train_op_L[l], feed_dict=feed_dict)
         W[l], b[l] = sess.run([nscope+'W:0', nscope+'b:0'])
 
-        if t % 200 == 0: # tensorboard
+        if t % 100 == 0: # tensorboard
           summary_str = sess.run(summary_ops[l], feed_dict=feed_dict)
           summary_writer.add_summary(summary_str, t)
 
     # after one training step, save accuracy to tensorboard
-    if t % 25 == 0:
+    if t % 100 == 0:
       feed_dict = {'global_loss_placeholder:0': L[t]}
       if mode == 'classification':
         feed_dict['accuracy_placeholder:0'] = accuracy[t]
