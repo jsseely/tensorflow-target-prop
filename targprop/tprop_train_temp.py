@@ -45,7 +45,7 @@ def make_tf_L(layer, W_init, b_init, lr, act=tf.nn.tanh):
     x_0 = tf.placeholder(tf.float32, shape=[None, W_init.shape[0]], name='input')
     y   = tf.placeholder(tf.float32, shape=[None, W_init.shape[1]], name='output')
     
-    loss = 0.5*tf.reduce_mean((act(tf.matmul(x_0, W) + b) - y)**2, name='loss') 
+    loss = tf.reduce_mean((act(tf.matmul(x_0, W) + b) - y)**2, name='loss') # should be, reduce_mean(reduce_sum(...))
     
     s1 = tf.summary.scalar('loss'+str(layer), loss)
     s2 = tf.summary.histogram('W'+str(layer), W)
@@ -72,7 +72,7 @@ def make_tf_Linv(layer, V_init, c_init, lr, act=tf.nn.tanh):
     x_0 = tf.placeholder(tf.float32, shape=[None, V_init.shape[1]], name='input')
     
     fx = act(tf.matmul(x_0, W) + b)
-    loss = 0.5*tf.reduce_mean((act(tf.matmul(fx, V) + c) - x_0)**2, name='loss')  
+    loss = tf.reduce_mean((act(tf.matmul(fx, V) + c) - x_0)**2, name='loss')  
     
     s1 = tf.summary.scalar('loss'+str(layer), loss)
     s2 = tf.summary.histogram('V'+str(layer), V)
@@ -85,37 +85,6 @@ def make_tf_Linv(layer, V_init, c_init, lr, act=tf.nn.tanh):
     clipped_gvs = [(tf.clip_by_norm(grad, 1.), var) for grad, var in gvs]
     return opt.apply_gradients(clipped_gvs), tf.summary.merge([s1] + sg)
 
-def make_tf_top(loss='sigmoid_ce'):
-  with tf.name_scope('top') as scope:
-    x = tf.placeholder(tf.float32, shape=[batch_size, l_dim[-1]], name='input')
-    y = tf.placeholder(tf.float32, shape=[batch_size, l_dim[-1]], name='output')
-
-    if loss=='sigmoid_ce':
-      L = tf.nn.sigmoid_cross_entropy_with_logits(x, y)
-      correct_prediction = np.equal(np.argmax(tf.sigmoid(x[-1]), axis=1), np.argmax(y, axis=1))
-      accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-      accuracy_summary = [tf.summary.scalar('accuracy', accuracy)]
-    elif loss=='softmax_ce':
-      L = tf.nn.softmax_cross_entropy_with_logits(x, y)
-      correct_prediction = np.equal(np.argmax(tf.nn.softmax(x[-1]), axis=1), np.argmax(y, axis=1))
-      accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-      accuracy_summary = [tf.summary.scalar('accuracy', accuracy)]
-    elif loss=='sigmoid_l2':
-      L = tf.nn.l2_loss(tf.sigmoid(x) - y)
-      accuracy = None
-      accuracy_summary = []
-    elif loss=='l2':
-      L = tf.nn.l2_loss(x - y)
-      accuracy = None
-      accuracy_summary = []
-
-    loss_summary = tf.summary.scalar('loss', L)
-    dx = tf.gradients(L, x)[0]
-
-    return L, dx, tf.merge([loss_summary] + accuracy_summary), accuracy
-
-
-
 def train_net(batch_size=100,
               t_steps=200,
               l_dim=[100, 50, 5, 50, 100],
@@ -126,7 +95,6 @@ def train_net(batch_size=100,
               err_alg=0,
               learning_rate=0.003,
               learning_rate_inv=0.003,
-              top_loss='sigmoid_ce',
               mode='autoencoder',
               dataset='mnist',
               update_implementation='numpy',
@@ -164,33 +132,6 @@ def train_net(batch_size=100,
         output_dict['actvs']: activations of last layer. for autoencoder mode. 
   """
 
-
-  # data
-  if dataset == 'cifar':
-    data = ds.cifar10_data()
-    data_test = ds.cifar10_data_test()
-  elif dataset == 'mnist':
-    data = ds.mnist_data()
-    data_test = ds.mnist_data_test()
-  
-  if preprocess:
-    from sklearn.decomposition import PCA
-    pca = PCA(n_components=100, whiten=True)
-    data.inputs = pca.fit_transform(data.inputs)
-    data_test.inputs = pca.transform(data_test.inputs)
-
-  # autoencoderify
-  if mode == 'autoencoder':
-    data.outputs = data.inputs
-    data_test.outputs = data_test.inputs
-
-  # model parameters / architecture
-  m_dim = data.inputs.shape[1] # input dimension
-  p_dim = data.outputs.shape[1] # output dimension
-  
-  l_dim = [m_dim] + l_dim + [p_dim] # layer dimensions
-  layers = len(l_dim)-1
-
   # operations from operations.py
   lin = ops.linear()
   add = ops.addition()
@@ -209,19 +150,40 @@ def train_net(batch_size=100,
     tf_act = tf.nn.relu
     nln = ops.relu()
 
-  F   = (layers+1)*[None] # activation functions
-  Ftf = (layers+1)*[None] # activation functions
-  for l in range(1, layers):
-    F[l]   = nln
-    Ftf[l] = tf_act
-  F[-1]   = ops.identity()
-  Ftf[-1] = tf.identity
+  # data
+  data = dataset
+  data_test = dataset
+  
+  if preprocess:
+    from sklearn.decomposition import PCA
+    pca = PCA(n_components=1000, whiten=True)
+    data.inputs = pca.fit_transform(data.inputs)
+    data_test.inputs = pca.transform(data_test.inputs)
 
-  # initialize lists
-  W = (layers+1)*[None] # forward weights
-  b = (layers+1)*[None] # biases
+  # autoencoderify
+  if mode == 'autoencoder':
+    data.outputs = data.inputs
+    data_test.outputs = data_test.inputs
+
+  # model parameters
+  m_dim = data.inputs.shape[1] # input dimension
+  p_dim = data.outputs.shape[1] # output dimension
+  
+  l_dim = [m_dim] + l_dim + [p_dim] # layer dimensions
+  layers = len(l_dim)-1
 
   b_init = 0.0 # init for bias terms
+
+  # initialize lists
+  W  = (layers+1)*[None] # forward weights
+  dW = (layers+1)*[None] # dL/dW
+  b  = (layers+1)*[None] # biases
+  db = (layers+1)*[None] # dL/db
+
+  L = np.zeros((t_steps+1)) # loss
+
+  if mode == 'classification':
+    accuracy = np.zeros((t_steps+1)) # accuracy 
 
   if err_alg == 3:
     V = (layers+1)*[None]
@@ -262,24 +224,22 @@ def train_net(batch_size=100,
     #   for l in range(layers/2+1, layers+1):
     #     V[layers+1-l] = V[l].T
 
+
   # create tensorflow graph with layer-local loss functions
   if update_implementation == 'tf':
     tf.reset_default_graph()
     for l in range(1, layers+1):
-      train_op_L[l], summary_ops[l] = make_tf_L(l, W[l], b[l], learning_rate, Ftf[l])
+      train_op_L[l], summary_ops[l] = make_tf_L(l, W[l], b[l], learning_rate, tf_act)
       if err_alg == 3 and l > 1:
         train_op_L_inv[l], summary_ops_inv[l] = make_tf_Linv(l, V[l], c[l], learning_rate_inv, tf_act)
     
-    # loss layer
-    global_loss, dL_dx, global_summaries, global_accuracy = make_tf_top( top_loss )
-
     # add some basic summaries 
-    #loss_sum = tf.summary.scalar('global_loss', tf.placeholder(tf.float32, shape=None, name='global_loss_placeholder'))
-    #if mode == 'classification':
-    #  acc_sum = tf.summary.scalar('accuracy', tf.placeholder(tf.float32, shape=None, name='accuracy_placeholder'))
-    #  global_sums = tf.summary.merge((acc_sum, loss_sum))
-    #elif mode == 'autoencoder':
-    #  global_sums = tf.summary.merge((loss_sum, ))
+    loss_sum = tf.summary.scalar('global_loss', tf.placeholder(tf.float32, shape=None, name='global_loss_placeholder'))
+    if mode == 'classification':
+      acc_sum = tf.summary.scalar('accuracy', tf.placeholder(tf.float32, shape=None, name='accuracy_placeholder'))
+      global_sums = tf.summary.merge((acc_sum, loss_sum))
+    elif mode == 'autoencoder':
+      global_sums = tf.summary.merge((loss_sum, ))
 
   # initialize activation lists
   x1 = (layers+1)*[None] # x1 = W*x3
@@ -304,7 +264,7 @@ def train_net(batch_size=100,
   # start training
   sess = tf.Session()
   sess.run(tf.global_variables_initializer())
-  summary_writer = tf.summary.FileWriter(tb_path)
+  summary_writer = tf.summary.FileWriter(tb_path, sess.graph)
   for t in range(t_steps+1):
 
     if err_alg==3:
@@ -319,25 +279,30 @@ def train_net(batch_size=100,
     
     # STEP 1: forward pass
     x3[0] = x0
-    for l in range(1, layers+1): # up to but not including the last layer
-      x1[l] =  lin.f( x3[l-1], W[l] )
-      x2[l] =  add.f( x1[l],   b[l] )
-      x3[l] = F[l].f( x2[l]         ) 
-
-    # loss layer
-    dx3[-1] = sess.run(dL_dx, feed_dict={'top_input:0': x3[-1], 'top_output:0': y})
+    for l in range(1, layers+1):
+      x1[l] = lin.f( x3[l-1], W[l] )
+      x2[l] = add.f( x1[l],   b[l] )
+      x3[l] = nln.f( x2[l]         ) #NOTE: not implementing top nonlin as softmax as in original dtp paper.
+    
+    # loss functions
+    if mode == 'autoencoder':
+      L[t] = mse( y, x3[-1] )
+    elif mode == 'classification':
+      L[t] = cross_entropy( y, softmax(x3[-1]) + 1e-10 ) # overflow
+      correct_prediction = np.equal(np.argmax(softmax(x3[-1]), axis=1), np.argmax(y, axis=1))
+      accuracy[t] = np.mean(correct_prediction.astype('float'))
 
     # STEP 2: backward pass
     # top layer errors and targets
-    tx3[-1] = x3[-1] - alpha_t*dx3[-1] # top layer target
-
+    dx3[-1] = x3[-1] - y # applies to both MSE and cross-entropy softmax
+    tx3[-1] = x3[-1] - alpha_t*(x3[-1] - y) # top layer target
     for l in range(layers, 0, -1):
       
       if err_alg == 0:
         # backprop
-        dx2[l]   = F[l].df( dx3[l], x2[l]         )
-        dx1[l]   =  add.df( dx2[l], x1[l],   b[l] )
-        dx3[l-1] =  lin.df( dx1[l], x3[l-1], W[l] )
+        dx2[l]   = nln.df( dx3[l], x2[l]         )
+        dx1[l]   = add.df( dx2[l], x1[l],   b[l] )
+        dx3[l-1] = lin.df( dx1[l], x3[l-1], W[l] )
 
         # backprop 'targets' 
         tx2[l] = x2[l] - dx2[l] # TODO: use learning_rate*dx2[l] or not?
@@ -346,9 +311,9 @@ def train_net(batch_size=100,
 
       elif err_alg == 1:
         # least-squares target prop, i.e. op-by-op difference target prop
-        tx2[l]   = F[l].f_inv( tx3[l], x2[l],        )
-        tx1[l]   =  add.f_inv( tx2[l], x1[l],   b[l] )
-        tx3[l-1] =  lin.f_inv( tx1[l], x3[l-1], W[l] )
+        tx2[l]   = nln.f_inv( tx3[l], x2[l],        )
+        tx1[l]   = add.f_inv( tx2[l], x1[l],   b[l] )
+        tx3[l-1] = lin.f_inv( tx1[l], x3[l-1], W[l] )
 
         # target prop 'errors'
         dx2[l]   = x2[l]   - tx2[l]
@@ -357,9 +322,9 @@ def train_net(batch_size=100,
 
       elif err_alg == 2:
         # regularized least-squares target prop
-        tx2[l]   = F[l].f_rinv( tx3[l], x2[l],         gamma )
-        tx1[l]   =  add.f_rinv( tx2[l], x1[l],   b[l], gamma )
-        tx3[l-1] =  lin.f_rinv( tx1[l], x3[l-1], W[l], gamma )
+        tx2[l]   = nln.f_rinv( tx3[l], x2[l],         gamma )
+        tx1[l]   = add.f_rinv( tx2[l], x1[l],   b[l], gamma )
+        tx3[l-1] = lin.f_rinv( tx1[l], x3[l-1], W[l], gamma )
 
         # target prop 'errors'
         dx2[l]   = x2[l]   - tx2[l]
@@ -375,16 +340,15 @@ def train_net(batch_size=100,
     for l in range(1, layers+1):
 
       if update_implementation=='numpy':
-        pass
-        # # gradient descent
-        # dW[l] = -learning_rate*np.dot(x3[l-1].T, dx1[l])/batch_size
-        # db[l] = -learning_rate*np.mean(dx2[l], axis=0)
-        # # clip gradients
-        # dW[l] = clip(dW[l], 1e4)
-        # db[l] = clip(db[l], 1e4)
-        # # update variables
-        # W[l] = W[l] + dW[l]
-        # b[l] = b[l] + db[l]
+        # gradient descent
+        dW[l] = -learning_rate*np.dot(x3[l-1].T, dx1[l])/batch_size
+        db[l] = -learning_rate*np.mean(dx2[l], axis=0)
+        # clip gradients
+        dW[l] = clip(dW[l], 1e4)
+        db[l] = clip(db[l], 1e4)
+        # update variables
+        W[l] = W[l] + dW[l]
+        b[l] = b[l] + db[l]
 
       elif update_implementation=='tf':
         
@@ -409,11 +373,16 @@ def train_net(batch_size=100,
         W[l], b[l] = sess.run([nscope+'W:0', nscope+'b:0'])
 
         if t % 100 == 0: # tensorboard
-          summary_writer.add_summary(sess.run(summary_ops[l], feed_dict=feed_dict), t)
+          summary_str = sess.run(summary_ops[l], feed_dict=feed_dict)
+          summary_writer.add_summary(summary_str, t)
 
     # after one training step, save accuracy to tensorboard
     if t % 100 == 0:
-      summary_writer.add_summary(sess.run(global_summaries, feed_dict={'top_input:0': x3[-1], 'top_output:0': y}), t)
+      feed_dict = {'global_loss_placeholder:0': L[t]}
+      if mode == 'classification':
+        feed_dict['accuracy_placeholder:0'] = accuracy[t]
+      summary_str = sess.run(global_sums, feed_dict=feed_dict)
+      summary_writer.add_summary(summary_str, t)
 
     if t % 500 == 0:
       print 'Iter: ', t, 'Loss: ', L[t]
@@ -423,30 +392,34 @@ def train_net(batch_size=100,
   # feedforward pass with test data
   x3_test[0] = data_test.inputs
   for l in range(1, layers+1):
-    x1_test[l] =  lin.f( x3_test[l-1], W[l] )
-    x2_test[l] =  add.f( x1_test[l],   b[l] )
-    x3_test[l] = F[l].f( x2_test[l]         )
-
-  L_test, accuracy_test = sess.run([global_loss, global_accuracy], feed_dict={'top_input:0': x3[-1], 'top_output:0': data_test.outputs})
+    x1_test[l] = lin.f( x3_test[l-1], W[l] )
+    x2_test[l] = add.f( x1_test[l],   b[l] )
+    x3_test[l] = nln.f( x2_test[l]         )
 
   # test set loss and accuracy
-  # if mode=='autoencoder':
-  #   L_test = mse( data_test.outputs, x3_test[-1] )
-  # elif mode=='classification':
-  #   L_test = cross_entropy( data_test.outputs, softmax(x3_test[-1]) + 1e-10 )
-  #   correct_prediction = np.equal(np.argmax(softmax(x3_test[-1]), axis=1), np.argmax(data_test.outputs, axis=1))
-  #   accuracy_test = np.mean(correct_prediction.astype('float'))
+  if mode=='autoencoder':
+    L_test = mse( data_test.outputs, x3_test[-1] )
+  elif mode=='classification':
+    L_test = cross_entropy( data_test.outputs, softmax(x3_test[-1]) + 1e-10 )
+    correct_prediction = np.equal(np.argmax(softmax(x3_test[-1]), axis=1), np.argmax(data_test.outputs, axis=1))
+    accuracy_test = np.mean(correct_prediction.astype('float'))
 
   # prepare the output dictionary
   output_dict = {}
-  #output_dict['L'] = L # too big
+  output_dict['L'] = L # too big
   output_dict['L_test'] = L_test
-  output_dict['accuracy_test'] = accuracy_test
 
   if mode == 'autoencoder':
     output_dict['actvs'] = x3_test[-1][:20] # save final layer activations (reconstructions)
-  # elif mode == 'classification':
-    #output_dict['accuracy'] = accuracy # too big
+  elif mode == 'classification':
+    output_dict['accuracy'] = accuracy # too big
+    output_dict['accuracy_test'] = accuracy_test
+
+  output_dict_ = output_dict.copy()
+  output_dict_.update(dict([(name, eval(name)) for name in ['W', 'b', 'x1', 'x2', 'x3', 'dx1', 'dx2', 'dx3', 'tx1', 'tx2', 'tx3', 'x0', 'y', 'layers', 'l_dim']]))
 
   sess.close() # (= _ =) ..zzZZ
-  return output_dict
+  return output_dict_
+
+
+

@@ -13,17 +13,17 @@ def tf_rinv(y, x_0, func, func_inv, gamma=1e-2):
   x_0 = x_0.astype('float32')
   g = tf.Graph()
   with g.as_default():
-    x_val = func_inv(y, x_0, th=1e-4)+ 0.01*np.random.randn(*x_0.shape)
+    x_val = func_inv(y, x_0, th=1e-2)+ 0.001*np.random.randn(*x_0.shape)
     x = tf.Variable(x_val)
-    L = tf.reduce_mean(tf.reduce_sum((func(x) - y)**2 + gamma*(x - x_0)**2, axis=1))
-    opt = tf.train.AdamOptimizer(0.1).minimize(L)
+    L = tf.reduce_mean(tf.reduce_sum((func(x) - y)**2. + gamma*(x - x_0)**2., axis=1))
+    opt = tf.train.AdamOptimizer(0.01).minimize(L)
     fdiff = np.inf
     xdiff = np.inf
     with tf.Session() as sess:
       sess.run(tf.global_variables_initializer())
       f_val = sess.run(L) 
       counter = 0
-      while (fdiff > 1e-4 or xdiff > 1e-4) and counter < 300:
+      while (fdiff > 1e-8 or xdiff > 1e-6) and counter < 1000:
         counter += 1
         sess.run(opt)
         f_val_, x_val_ = sess.run([L, x])
@@ -31,6 +31,8 @@ def tf_rinv(y, x_0, func, func_inv, gamma=1e-2):
         xdiff = np.max(np.linalg.norm(x_val - x_val_, axis=1, keepdims=True))
         x_val = x_val_
         f_val = f_val_
+        if counter % 300 == 0:
+          print 'f_val: ', f_val, 'fdiff: ', fdiff, 'xdiff: ', xdiff 
       return x_val
 
 def fmin_rinv(y, x_0, func, func_inv, gamma=1e-2):

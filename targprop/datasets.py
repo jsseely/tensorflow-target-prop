@@ -115,7 +115,7 @@ def ball(n=100, d=3, r=1, c=0):
   """
     Uniformly sample from the interior of a sphere
   """
-  x = sphere(n, d, r).inputs
+  x = sphere(n, d, 1.).inputs
   u = r*np.random.rand(n)**(1./d)
   return DataSet(u[:, np.newaxis]*x + c)
 
