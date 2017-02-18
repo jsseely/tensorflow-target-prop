@@ -16,32 +16,38 @@ import numpy as np
 
 from targprop.tprop_train import train_net
 
-# Iterable parameters
+# parameters
 cur_params = {}
-cur_params['batch_size']        = 100
-cur_params['gamma']             = 10**np.random.uniform(-2, 1)
-cur_params['alpha_t']           = np.random.uniform(0.1, 1)
-cur_params['noise_str']         = 10**np.random.uniform(-2, 2)
-cur_params['learning_rate']     = 10**np.random.uniform(-6, -2)
-cur_params['learning_rate_inv'] = 10**np.random.uniform(-6, 1)
+cur_params['batch_size']         = 100
+cur_params['t_steps']            = 20000
 
-T_STEPS = 20000
-UPDATES = 'tf'
-SGD = True
+cur_params['gamma']              = 10**np.random.uniform(-4, 1)
+cur_params['alpha_t']            = np.random.uniform(0., 1.)
+cur_params['noise_str']          = 10**np.random.uniform(-4, 2)
 
+cur_params['learning_rate']      = 10**np.random.uniform(-5, -1)
+cur_params['learning_rate_inv']  = 10**np.random.uniform(-5, -1)
+cur_params['learning_rate_rinv'] = 10**np.random.uniform(-2, 1)
+cur_params['num_steps_rinv']     = np.random.randint(1, 10)
+
+cur_params['SGD']                = True
+
+# input parameters
 CUR_SIM = int(sys.argv[1])
 CUR_RUN = str(sys.argv[2])
 
 MODE = str(sys.argv[3])
 ACT = str(sys.argv[4])
 
-DATASET = 'mnist'
-
-if MODE == 'classification':
+# input-dependent parameters
+if MODE == 'autoencoder':
+  cur_params['top_loss'] = 'sigmoid_ce'
+  cur_params['l_dim'] = [200, 100, 3, 100, 200]
+elif MODE == 'classification':
+  cur_params['top_loss'] = 'softmax_ce'
   cur_params['l_dim'] = 5*[200]
-elif MODE == 'autoencoder':
-  cur_params['l_dim'] = [200, 100, 5, 100, 200]
 
+DATASET = 'mnist'
 if DATASET == 'cifar':
   PREPROCESS = True
 elif DATASET == 'mnist':
@@ -71,22 +77,9 @@ print cur_params
 
 out_dict = []
 for err_alg in [0, 2, 3]:
-  out_dict_ = train_net(batch_size=cur_params['batch_size'],
-                         t_steps=T_STEPS,
-                         l_dim=cur_params['l_dim'],
-                         act=ACT,
-                         gamma=cur_params['gamma'],
-                         alpha_t=cur_params['alpha_t'],
-                         noise_str=cur_params['noise_str'],
-                         err_alg=err_alg,
-                         learning_rate=cur_params['learning_rate'],
-                         learning_rate_inv=cur_params['learning_rate_inv'],
-                         mode=MODE,
-                         dataset=DATASET,
-                         update_implementation=UPDATES,
-                         SGD=SGD,
-                         preprocess=PREPROCESS,
-                         tb_path=TB_PATH+str(CUR_SIM)+'_'+str(err_alg))
+  out_dict_ = train_net(err_alg=err_alg, 
+                        tb_path=TB_PATH+str(CUR_SIM)+'_'+str(err_alg),
+                        **cur_params)
   out_dict.append(out_dict_)
 
 pickle.dump(out_dict, open(SAVE_PATH+str(CUR_SIM)+'.pickle', 'wb'))

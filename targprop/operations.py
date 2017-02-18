@@ -8,22 +8,23 @@ import numpy as np
 from scipy.optimize import fmin
 import tensorflow as tf
 
-def tf_rinv(y, x_0, func, func_inv, gamma=1e-2):
+def tf_rinv(y, x_0, func, func_inv, gamma=1e-2, lr=0.1, num_steps=2):
+  """ slow implementation, because it has to create a new graph each time it is called. """
   y = y.astype('float32')
   x_0 = x_0.astype('float32')
   g = tf.Graph()
   with g.as_default():
-    x_val = func_inv(y, x_0, th=1e-2)+ 0.001*np.random.randn(*x_0.shape)
+    x_val = func_inv(y, x_0, th=1e-2)+ 0.0*np.random.randn(*x_0.shape)
     x = tf.Variable(x_val)
-    L = tf.reduce_mean(tf.reduce_sum((func(x) - y)**2. + gamma*(x - x_0)**2., axis=1))
-    opt = tf.train.AdamOptimizer(0.01).minimize(L)
+    L = tf.reduce_mean((func(x) - y)**2. + gamma*(x - x_0)**2.)
+    opt = tf.train.GradientDescentOptimizer(lr).minimize(L)
     fdiff = np.inf
     xdiff = np.inf
     with tf.Session() as sess:
       sess.run(tf.global_variables_initializer())
       f_val = sess.run(L) 
       counter = 0
-      while (fdiff > 1e-8 or xdiff > 1e-6) and counter < 1000:
+      while counter < num_steps:
         counter += 1
         sess.run(opt)
         f_val_, x_val_ = sess.run([L, x])
@@ -31,8 +32,6 @@ def tf_rinv(y, x_0, func, func_inv, gamma=1e-2):
         xdiff = np.max(np.linalg.norm(x_val - x_val_, axis=1, keepdims=True))
         x_val = x_val_
         f_val = f_val_
-        if counter % 300 == 0:
-          print 'f_val: ', f_val, 'fdiff: ', fdiff, 'xdiff: ', xdiff 
       return x_val
 
 def fmin_rinv(y, x_0, func, func_inv, gamma=1e-2):
@@ -152,7 +151,7 @@ def sigmoid():
   def f_inv(y, x_0, th=1e-2):
     y = np.piecewise(y, [y <= th, y > th, y >= (1 - th)], [th, lambda y_: y_, 1 - th])
     return -np.log(1./y - 1.)
-  def f_rinv(y, x_0, gamma=1e-2):
+  def f_rinv(y, x_0, gamma=1e-2, lr=0.1, num_steps=2):
     return tf_rinv(y, x_0, tf.nn.sigmoid, f_inv, gamma=gamma)
   return Op(f, df, f_inv, f_rinv)
 
@@ -164,7 +163,7 @@ def tanh():
   def f_inv(y, x_0, th=1e-2):
     y = np.piecewise(y, [y <= (-1+th), y > (-1+th), y >= (1-th)], [-1+th, lambda y_: y_, 1-th])
     return 0.5*np.log((1. + y)/(1. - y))
-  def f_rinv(y, x_0, gamma=1e-2):
+  def f_rinv(y, x_0, gamma=1e-2, lr=0.1, num_steps=2):
     return tf_rinv(y, x_0, tf.nn.tanh, f_inv, gamma=gamma)
   return Op(f, df, f_inv, f_rinv)
 
@@ -182,7 +181,7 @@ def relu():
     x_3 = x_0
     x_out = case_1*x_1 + case_2*x_2 + case_3*x_3
     return x_out
-  def f_rinv(y, x0, gamma=1e-2):
+  def f_rinv(y, x0, gamma=1e-2, lr=None, num_steps=None):
     def cost(x):
       return (f(x) - y)**2 + gamma*(x - x0)**2
     x_out = np.zeros(y.shape)
@@ -206,7 +205,7 @@ def linear():
   def f_inv(y, x_0, A):
     Apinv = np.linalg.pinv(A)
     return x_0 - np.dot(np.dot(x_0, A), Apinv) + np.dot(y, Apinv)
-  def f_rinv(y, x_0, A, gamma=1e-2):
+  def f_rinv(y, x_0, A, gamma=1e-2, lr=None, num_steps=None):
     # assert gamma > 0
     return np.dot( np.dot(y, A.T) + gamma*x_0 , np.linalg.inv(np.dot(A, A.T) + gamma*np.eye(x_0.shape[1])) )
   return Op(f, df, f_inv, f_rinv)
@@ -218,7 +217,7 @@ def addition():
     return y
   def f_inv(y, x_0, b):
     return y - b
-  def f_rinv(y, x_0, b, gamma=1e-2):
+  def f_rinv(y, x_0, b, gamma=1e-2, lr=None, num_steps=None):
     return (y - b + gamma*x_0)/(1. + gamma)
   return Op(f, df, f_inv, f_rinv)
 
@@ -226,11 +225,11 @@ def identity():
   def f(x):
     return x
   def df(y, x=None):
-    return y
+    return y # to clarify, df=1, so return y*df by the chain rule. 
   def f_inv(y, x_0):
     return y
-  def f_rinv(y, x_0, gamma=1e-2):
+  def f_rinv(y, x_0, gamma=1e-2, lr=None, num_steps=None):
     # actual rinv not implemented...
     return y
-  return Op(f, dr, f_inv, f_rinv)
+  return Op(f, df, f_inv, f_rinv)
 

@@ -4,7 +4,7 @@
 #SBATCH -c 1
 #SBATCH --time=04:00:00
 #SBATCH --mem-per-cpu=1gb
-#SBATCH --array=1-100
+#SBATCH --array=1-500
 #SBATCH --error=./slurmerr/%A_%a.err
 #SBATCH --output=./slurmout/%A_%a.out
 
