@@ -4,8 +4,8 @@
     layer:     [  0  ]    [          1           ]    [          2           ]    [   3  ]    [   top    ]
     network:   [input] -> [affine -> nonlinearity] -> [affine -> nonlinearity] -> [affine] -> [loss layer]
   
-  where [loss layer] = [softmax -> cross_entropy], [sigmoid -> cross_entropy], [sigmoid -> MSE], etc
-  i.e. the last nonlinearity is part of the [loss layer], not layer 3.
+  where [loss layer] = [softmax -> cross_entropy], [sigmoid -> cross_entropy], [sigmoid -> MSE], or just [MSE]
+  i.e. the last nonlinearity is part of the [loss layer], not layer 3, and layer 3 is just affine.
 
   TODO: make sure everything is float32
   TODO: make_top_top should be consistent with other make_tf* functions in how it returns python variables containing tf objects, namescopes, etc.

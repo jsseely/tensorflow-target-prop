@@ -40,6 +40,7 @@ def fmin_rinv(y, x_0, func, func_inv, gamma=1e-2):
   x = func_inv(y, x_0, th=1e-2)
   for i in range(y.shape[0]):
     x[i] = fmin(cost, x[i], args=(y[i, np.newaxis], x_0[i, np.newaxis]), xtol=1e-4, ftol=1e-4, maxiter=50, disp=0)
+  return x
 
 # this implementation didn't work really...
 def tf_rinv_NOPE(y, x_0, func, func_inv, gamma=1e-2):
