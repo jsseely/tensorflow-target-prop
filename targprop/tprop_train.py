@@ -42,8 +42,8 @@ def make_tf_L(layer, W_shape, b_shape, lr, act=tf.nn.tanh):
   """
   with tf.name_scope('layer'+str(layer)+'_ff') as scope:
 
-    #W = tf.get_variable(scope+'W', shape=W_shape, dtype=tf.float32, initializer=tf.orthogonal_initializer(0.95))
-    W = tf.get_variable(scope+'W', shape=W_shape, dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer(uniform=True, seed=None, dtype=tf.float32))
+    W = tf.get_variable(scope+'W', shape=W_shape, dtype=tf.float32, initializer=tf.orthogonal_initializer(0.95))
+    #W = tf.get_variable(scope+'W', shape=W_shape, dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer(uniform=True, seed=None, dtype=tf.float32))
     b = tf.get_variable(scope+'b', shape=b_shape, dtype=tf.float32, initializer=tf.constant_initializer(0.))
 
     x_0 = tf.placeholder(tf.float32, shape=[None, W_shape[0]], name='input')
@@ -55,7 +55,7 @@ def make_tf_L(layer, W_shape, b_shape, lr, act=tf.nn.tanh):
     s2 = tf.summary.histogram('W'+str(layer), W)
     s3 = tf.summary.histogram('b'+str(layer), b) 
     
-    opt = tf.train.AdamOptimizer(lr)
+    opt = tf.train.RMSPropOptimizer(lr)
     gvs = opt.compute_gradients(loss, var_list=[W, b])
     sg  = [tf.summary.scalar('norm_grad'+var.name[-3], tf.nn.l2_loss(grad)) for grad, var in gvs] # var.name = 'namescope/V:0' and we want just 'V'
     clipped_gvs = [(tf.clip_by_norm(grad, 1.), var) for grad, var in gvs] # hmmmmmm. clip by norm value?
@@ -66,8 +66,8 @@ def make_tf_Linv(layer, V_shape, c_shape, lr, act=tf.nn.tanh):
   """ builds graph for layer-local training of V and c """
   with tf.name_scope('layer'+str(layer)+'_inv') as scope:
 
-    #V = tf.get_variable(scope+'V', shape=V_shape, dtype=tf.float32, initializer=tf.orthogonal_initializer(0.95))
-    V = tf.get_variable(scope+'V', shape=V_shape, dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer(uniform=True, seed=None, dtype=tf.float32))
+    V = tf.get_variable(scope+'V', shape=V_shape, dtype=tf.float32, initializer=tf.orthogonal_initializer(0.95))
+    #V = tf.get_variable(scope+'V', shape=V_shape, dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer(uniform=True, seed=None, dtype=tf.float32))
     c = tf.get_variable(scope+'c', shape=c_shape, dtype=tf.float32, initializer=tf.constant_initializer(0.))
     
     W = tf.placeholder(tf.float32, shape=[V_shape[1], V_shape[0]], name='W')
@@ -81,7 +81,7 @@ def make_tf_Linv(layer, V_shape, c_shape, lr, act=tf.nn.tanh):
     s2 = tf.summary.histogram('V'+str(layer), V)
     s3 = tf.summary.histogram('c'+str(layer), c) 
     
-    opt = tf.train.AdamOptimizer(lr)
+    opt = tf.train.RMSPropOptimizer(lr)
     gvs = opt.compute_gradients(loss, var_list=[V, c])
     sg  = [tf.summary.scalar('norm_grad'+var.name[-3], tf.nn.l2_loss(grad)) for grad, var in gvs] # var.name = 'namescope/V:0' and we want just 'V'
     clipped_gvs = [(tf.clip_by_norm(grad, 1.), var) for grad, var in gvs]
@@ -269,7 +269,7 @@ def train_net(batch_size=100,
   tx2 = (layers+1)*[None]
   tx1 = (layers+1)*[None]
 
-  # (  >__<)  start training (>__< )
+  # (  >__<)   start training  (>__< )
   sess = tf.Session()
   sess.run(tf.global_variables_initializer())
   summary_writer = tf.summary.FileWriter(tb_path)
@@ -382,7 +382,7 @@ def train_net(batch_size=100,
     if t % 500 == 0:
       print 'Iter: ', t, 'Loss, accuracy: ', sess.run([global_loss, global_accuracy], feed_dict={'top/input:0': x3[-1], 'top/output:0': y})
 
-  # ( V ^__^) V training complete V (^__^ V )
+  # ( V ^__^) V   training complete   V (^__^ V )
 
   # test set activations
   x1_test = (layers+1)*[None]
@@ -405,9 +405,9 @@ def train_net(batch_size=100,
 
   if mode == 'autoencoder':
     if top_loss == 'sigmoid_ce':
-      output_dict['acvts'] = sess.run(tf.sigmoid(x3_test[-1][:20]))
+      output_dict['reconstruction'] = sess.run(tf.sigmoid(x3_test[-1][:20]))
     else:
-      output_dict['actvs'] = x3_test[-1][:20] # save final layer activations (reconstructions)
+      output_dict['reconstruction'] = x3_test[-1][:20] # save final layer activations (reconstructions)
 
 
   sess.close() # (= _ =) ..zzZZ

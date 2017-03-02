@@ -8,4 +8,4 @@
 #SBATCH --error=./slurmerr/%A_%a.err
 #SBATCH --output=./slurmout/%A_%a.out
 
-python wrapper.py $SLURM_ARRAY_TASK_ID "170218_ae_relu" "autoencoder" "relu" 
+python wrapper.py $SLURM_ARRAY_TASK_ID "170302_ae_relu" "autoencoder" "relu" 

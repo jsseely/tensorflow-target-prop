@@ -152,9 +152,12 @@ def sigmoid():
   def f_inv(y, x_0, th=1e-2):
     y = np.piecewise(y, [y <= th, y > th, y >= (1 - th)], [th, lambda y_: y_, 1 - th])
     return -np.log(1./y - 1.)
-  def f_rinv(y, x_0, gamma=1e-2, lr=0.1, num_steps=2):
-    return tf_rinv(y, x_0, tf.nn.sigmoid, f_inv, gamma=gamma)
-  return Op(f, df, f_inv, f_rinv)
+  def f_rinv(y, x_0, gamma=1e-2, lr=0.1, num_steps=2, scipy_fmin=False):
+    if scipy_fmin:
+      return fmin_rinv( y, x_0, f, f_inv, gamma=gamma )
+    else:
+      return tf_rinv( y, x_0, tf.nn.sigmoid, f_inv, gamma=gamma, lr=lr, num_steps=num_steps )
+  return Op( f, df, f_inv, f_rinv )
 
 def tanh():
   def f(x):
@@ -164,9 +167,12 @@ def tanh():
   def f_inv(y, x_0, th=1e-2):
     y = np.piecewise(y, [y <= (-1+th), y > (-1+th), y >= (1-th)], [-1+th, lambda y_: y_, 1-th])
     return 0.5*np.log((1. + y)/(1. - y))
-  def f_rinv(y, x_0, gamma=1e-2, lr=0.1, num_steps=2):
-    return tf_rinv(y, x_0, tf.nn.tanh, f_inv, gamma=gamma)
-  return Op(f, df, f_inv, f_rinv)
+  def f_rinv(y, x_0, gamma=1e-2, lr=0.1, num_steps=2, scipy_fmin=False):
+    if scipy_fmin:
+      return fmin_rinv( y, x_0, f, f_inv, gamma=gamma )
+    else:
+      return tf_rinv( y, x_0, tf.nn.tanh, f_inv, gamma=gamma, lr=lr, num_steps=num_steps )
+  return Op( f, df, f_inv, f_rinv )
 
 def relu():
   def f(x):

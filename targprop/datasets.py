@@ -186,12 +186,17 @@ def spiral(n=100, r=2., s=3.):
 ### REAL DATA
 def mnist_data():
   from tensorflow.examples.tutorials.mnist import input_data
-  mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
+  mnist = input_data.read_data_sets('MNIST_data', one_hot=True, validation_size=10000)
   return DataSet(mnist.train.images, mnist.train.labels)
+
+def mnist_data_val():
+  from tensorflow.examples.tutorials.mnist import input_data
+  mnist = input_data.read_data_sets('MNIST_data', one_hot=True, validation_size=10000)
+  return DataSet(mnist.validation.images, mnist.validation.labels)
 
 def mnist_data_test():
   from tensorflow.examples.tutorials.mnist import input_data
-  mnist = input_data.read_data_sets('MNIST_data', one_hot=True)
+  mnist = input_data.read_data_sets('MNIST_data', one_hot=True, validation_size=10000)
   return DataSet(mnist.test.images, mnist.test.labels)
 
 def cifar10_data():
