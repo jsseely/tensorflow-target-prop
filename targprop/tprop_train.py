@@ -51,14 +51,15 @@ def make_tf_L(layer, W_shape, b_shape, lr, act=tf.nn.tanh):
     
     loss = 0.5*tf.reduce_mean((act(tf.matmul(x_0, W) + b) - y)**2, name='loss') 
     
-    s1 = tf.summary.scalar('loss'+str(layer), loss)
+    s1 = tf.summary.scalar('log_loss'+str(layer), tf.log(loss))
     s2 = tf.summary.histogram('W'+str(layer), W)
     s3 = tf.summary.histogram('b'+str(layer), b) 
     
-    opt = tf.train.RMSPropOptimizer(lr)
+    # opt = tf.train.RMSPropOptimizer(lr) # rmsprop works *way* better than adam for local loss functions. unclear why.
+    opt = tf.train.GradientDescentOptimizer(lr) # rmsprop works *way* better than adam for local loss functions. unclear why.
     gvs = opt.compute_gradients(loss, var_list=[W, b])
     sg  = [tf.summary.scalar('norm_grad'+var.name[-3], tf.nn.l2_loss(grad)) for grad, var in gvs] # var.name = 'namescope/V:0' and we want just 'V'
-    clipped_gvs = [(tf.clip_by_norm(grad, 1.), var) for grad, var in gvs] # hmmmmmm. clip by norm value?
+    clipped_gvs = [(tf.clip_by_norm(grad, 100.), var) for grad, var in gvs] # hmmmmmm. clip by norm value?
     
     return opt.apply_gradients(clipped_gvs), tf.summary.merge([s1] + sg)
 
@@ -77,14 +78,14 @@ def make_tf_Linv(layer, V_shape, c_shape, lr, act=tf.nn.tanh):
     fx = act(tf.matmul(x_0, W) + b)
     loss = 0.5*tf.reduce_mean((act(tf.matmul(fx, V) + c) - x_0)**2, name='loss')  
     
-    s1 = tf.summary.scalar('loss'+str(layer), loss)
+    s1 = tf.summary.scalar('log_loss'+str(layer), tf.log(loss))
     s2 = tf.summary.histogram('V'+str(layer), V)
     s3 = tf.summary.histogram('c'+str(layer), c) 
     
     opt = tf.train.RMSPropOptimizer(lr)
     gvs = opt.compute_gradients(loss, var_list=[V, c])
     sg  = [tf.summary.scalar('norm_grad'+var.name[-3], tf.nn.l2_loss(grad)) for grad, var in gvs] # var.name = 'namescope/V:0' and we want just 'V'
-    clipped_gvs = [(tf.clip_by_norm(grad, 1.), var) for grad, var in gvs]
+    clipped_gvs = [(tf.clip_by_norm(grad, 100.), var) for grad, var in gvs]
     
     return opt.apply_gradients(clipped_gvs), tf.summary.merge([s1] + sg)
 
@@ -115,7 +116,7 @@ def make_tf_top(x_shape, loss='sigmoid_ce'):
       accuracy = None
       accuracy_summary = []
 
-    loss_summary = tf.summary.scalar('loss', L)
+    loss_summary = tf.summary.scalar('log_loss', tf.log(L))
     dx = tf.gradients(L, x)[0]
 
     return L, dx, tf.summary.merge([loss_summary] + accuracy_summary), accuracy
@@ -361,7 +362,7 @@ def train_net(batch_size=100,
         sess.run(train_op_L_inv[l], feed_dict=feed_dict)
         V[l], c[l] = sess.run([nscope+'V:0', nscope+'c:0'])
         
-        if t % 200 == 0: # tensorboard
+        if t % 1 == 0: # tensorboard
             summary_str = sess.run(summary_ops_inv[l], feed_dict=feed_dict)
             summary_writer.add_summary(summary_str, t)
       
@@ -372,11 +373,11 @@ def train_net(batch_size=100,
       sess.run(train_op_L[l], feed_dict=feed_dict)
       W[l], b[l] = sess.run([nscope+'W:0', nscope+'b:0'])
 
-      if t % 200 == 0: # tensorboard
+      if t % 1 == 0: # tensorboard
         summary_writer.add_summary(sess.run(summary_ops[l], feed_dict=feed_dict), t)
 
     # after one training step, save accuracy to tensorboard
-    if t % 200 == 0:
+    if t % 1 == 0:
       summary_writer.add_summary(sess.run(global_summaries, feed_dict={'top/input:0': x3[-1], 'top/output:0': y}), t)
 
     if t % 500 == 0:

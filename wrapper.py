@@ -22,13 +22,13 @@ cur_params = {}
 cur_params['batch_size']         = 100
 cur_params['t_steps']            = 20000 # 10k for now. maybe final sims will be 20k+
 
-cur_params['gamma']              = 10**np.random.uniform(-2, 4)
-cur_params['alpha_t']            = np.random.uniform(0., 1.)
+cur_params['gamma']              = 10**np.random.uniform(-6, 0)
+cur_params['alpha_t']            = np.random.uniform(0.5, 1.)
 cur_params['noise_str']          = 10**np.random.uniform(-4, 2)
 
-cur_params['learning_rate']      = 10**np.random.uniform(-8, -2)
-cur_params['learning_rate_inv']  = 10**np.random.uniform(-7, -3)
-cur_params['learning_rate_rinv'] = 10**np.random.uniform(-2, 1)
+cur_params['learning_rate']      = 10**np.random.uniform(-4, -1)
+cur_params['learning_rate_inv']  = 10**np.random.uniform(-4, -1)
+cur_params['learning_rate_rinv'] = 10**np.random.uniform(-4, 1)
 cur_params['num_steps_rinv']     = np.random.randint(1, 5)
 
 cur_params['SGD']                = True
@@ -42,10 +42,10 @@ cur_params['activation'] = str(sys.argv[4])
 # input-dependent parameters
 if cur_params['mode'] == 'autoencoder':
   cur_params['top_loss'] = random.choice(['sigmoid_ce'])
-  cur_params['l_dim'] = [200, 100, 100, 3, 100, 100, 200]
+  cur_params['l_dim'] = [200, 100, 5, 100, 200]
 elif cur_params['mode'] == 'classification':
   cur_params['top_loss'] = 'softmax_ce'
-  cur_params['l_dim'] = 5*[200]
+  cur_params['l_dim'] = 4*[240]
 
 DATASET = 'mnist'
 cur_params['dataset'] = 'mnist'
@@ -78,7 +78,7 @@ print 'Current Run: '+CUR_RUN
 print cur_params
 
 out_dict = []
-for err_alg in [0, 2, 3]:
+for err_alg in [0, 1, 2, 3]:
   out_dict_ = train_net(err_alg=err_alg, 
                         tb_path=TB_PATH+str(CUR_SIM)+'_'+str(err_alg),
                         **cur_params)

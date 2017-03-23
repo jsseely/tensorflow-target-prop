@@ -8,4 +8,4 @@
 #SBATCH --error=./slurmerr/%A_%a.err
 #SBATCH --output=./slurmout/%A_%a.out
 
-python wrapper.py $SLURM_ARRAY_TASK_ID "170302_cl_tanh" "classification" "tanh" 
+python wrapper.py $SLURM_ARRAY_TASK_ID "170305_cl_tanh" "classification" "tanh" 
