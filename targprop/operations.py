@@ -204,6 +204,17 @@ def relu():
     return x_out
   return Op(f, df, f_inv, f_rinv)
 
+def leaky_relu(slope=0.1):
+  def f(x):
+    return np.piecewise(x, [x < 0, x>=0], [lambda w:slope*w, lambda w: w])
+  def df(y, x):
+    return y*np.piecewise(x, [x < 0, x>=0], [lambda w:slope, lambda w: 1])
+  def f_inv(y, x_0):
+    return np.piecewise(y, [y < 0, y>=0], [lambda w:1./slope*w, lambda w: w])
+  def f_rinv(y, x_0):
+    return None
+  return Op(f, df, f_inv, f_rinv)
+
 def linear():
   def f(x, A):
     return np.dot(x, A)

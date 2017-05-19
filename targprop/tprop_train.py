@@ -42,21 +42,22 @@ def make_tf_L(layer, W_shape, b_shape, lr, act=tf.nn.tanh):
   """
   with tf.name_scope('layer'+str(layer)+'_ff') as scope:
 
-    W = tf.get_variable(scope+'W', shape=W_shape, dtype=tf.float32, initializer=tf.orthogonal_initializer(0.95))
-    #W = tf.get_variable(scope+'W', shape=W_shape, dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer(uniform=True, seed=None, dtype=tf.float32))
+    #W = tf.get_variable(scope+'W', shape=W_shape, dtype=tf.float32, initializer=tf.orthogonal_initializer(0.95))
+    W = tf.get_variable(scope+'W', shape=W_shape, dtype=tf.float32, initializer=tf.contrib.layers.xavier_initializer(uniform=True, seed=None, dtype=tf.float32))
     b = tf.get_variable(scope+'b', shape=b_shape, dtype=tf.float32, initializer=tf.constant_initializer(0.))
 
     x_0 = tf.placeholder(tf.float32, shape=[None, W_shape[0]], name='input')
     y   = tf.placeholder(tf.float32, shape=[None, W_shape[1]], name='output')
     
-    loss = 0.5*tf.reduce_mean((act(tf.matmul(x_0, W) + b) - y)**2, name='loss') 
+    #loss = 0.5*tf.reduce_mean((act(tf.matmul(x_0, W) + b) - y)**2, name='loss') 
+    loss = 0.5*tf.reduce_mean((tf.matmul(x_0, W) + b - y)**2, name='loss') 
     
     s1 = tf.summary.scalar('log_loss'+str(layer), tf.log(loss))
     s2 = tf.summary.histogram('W'+str(layer), W)
     s3 = tf.summary.histogram('b'+str(layer), b) 
     
-    # opt = tf.train.RMSPropOptimizer(lr) # rmsprop works *way* better than adam for local loss functions. unclear why.
-    opt = tf.train.GradientDescentOptimizer(lr) # rmsprop works *way* better than adam for local loss functions. unclear why.
+    opt = tf.train.RMSPropOptimizer(lr) # rmsprop works *way* better than adam for local loss functions. unclear why.
+    # opt = tf.train.GradientDescentOptimizer(lr) # rmsprop works *way* better than adam for local loss functions. unclear why.
     gvs = opt.compute_gradients(loss, var_list=[W, b])
     sg  = [tf.summary.scalar('norm_grad'+var.name[-3], tf.nn.l2_loss(grad)) for grad, var in gvs] # var.name = 'namescope/V:0' and we want just 'V'
     clipped_gvs = [(tf.clip_by_norm(grad, 100.), var) for grad, var in gvs] # hmmmmmm. clip by norm value?
@@ -98,23 +99,25 @@ def make_tf_top(x_shape, loss='sigmoid_ce'):
     y = tf.placeholder(tf.float32, shape=x_shape, name='output')
 
     if loss=='sigmoid_ce':
-      L = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(x, y))
+      L = tf.reduce_mean(tf.nn.sigmoid_cross_entropy_with_logits(logits=x, labels=y))
       correct_prediction = tf.equal(tf.round( tf.sigmoid(x) ), tf.round( y ))
       accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
       accuracy_summary = [tf.summary.scalar('accuracy', accuracy)]
     elif loss=='softmax_ce':
-      L = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(x, y))
+      L = tf.reduce_mean(tf.nn.softmax_cross_entropy_with_logits(logits=x, labels=y))
       correct_prediction = tf.equal(tf.argmax( tf.nn.softmax(x), 1 ), tf.argmax( y, 1 ))
       accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
       accuracy_summary = [tf.summary.scalar('accuracy', accuracy)]
     elif loss=='sigmoid_l2':
       L = tf.nn.l2_loss(tf.sigmoid(x) - y)
-      accuracy = None
-      accuracy_summary = []
+      correct_prediction = tf.equal(tf.argmax( tf.sigmoid(x), 1 ), tf.argmax( y, 1 ))
+      accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+      accuracy_summary = [tf.summary.scalar('accuracy', accuracy)]
     elif loss=='l2':
       L = tf.nn.l2_loss(x - y)
-      accuracy = None
-      accuracy_summary = []
+      correct_prediction = tf.equal(tf.argmax( x, 1 ), tf.argmax( y, 1 ))
+      accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
+      accuracy_summary = [tf.summary.scalar('accuracy', accuracy)]
 
     loss_summary = tf.summary.scalar('log_loss', tf.log(L))
     dx = tf.gradients(L, x)[0]
@@ -178,6 +181,10 @@ def train_net(batch_size=100,
   elif dataset == 'mnist':
     data = ds.mnist_data()
     data_test = ds.mnist_data_test()
+  else:
+    # set train and test the same. change later.
+    data = dataset
+    data_test = dataset
   
   if preprocess:
     from sklearn.decomposition import PCA
@@ -196,6 +203,9 @@ def train_net(batch_size=100,
   
   l_dim = [m_dim] + l_dim + [p_dim] # layer dimensions
   layers = len(l_dim)-1
+  print l_dim
+  print layers
+
 
   # operations from operations.py
   lin = ops.linear()
@@ -214,6 +224,11 @@ def train_net(batch_size=100,
   elif activation == 'relu':
     tf_act = tf.nn.relu
     op_act = ops.relu()
+  elif activation == 'leaky_relu':
+    def leaky_relu(x):
+      return tf.maximum(0.1*x, x)
+    tf_act = leaky_relu
+    op_act = ops.leaky_relu(0.1)
 
   # put activations in lists
   acts    = (layers+1)*[None] # activation functions
@@ -363,13 +378,13 @@ def train_net(batch_size=100,
         V[l], c[l] = sess.run([nscope+'V:0', nscope+'c:0'])
         
         if t % 1 == 0: # tensorboard
-            summary_str = sess.run(summary_ops_inv[l], feed_dict=feed_dict)
-            summary_writer.add_summary(summary_str, t)
+          summary_str = sess.run(summary_ops_inv[l], feed_dict=feed_dict)
+          summary_writer.add_summary(summary_str, t)
       
       # now update W and b
       nscope = 'layer'+str(l)+'_ff/'
       feed_dict={nscope+'input:0': x3[l-1],
-                 nscope+'output:0': tx3[l]} # use tx2 if not using activation in L[l]... 
+                 nscope+'output:0': tx2[l]} # use tx2 if not using activation in L[l]... else use tx3.
       sess.run(train_op_L[l], feed_dict=feed_dict)
       W[l], b[l] = sess.run([nscope+'W:0', nscope+'b:0'])
 
@@ -380,7 +395,7 @@ def train_net(batch_size=100,
     if t % 1 == 0:
       summary_writer.add_summary(sess.run(global_summaries, feed_dict={'top/input:0': x3[-1], 'top/output:0': y}), t)
 
-    if t % 500 == 0:
+    if t % 100 == 0:
       print 'Iter: ', t, 'Loss, accuracy: ', sess.run([global_loss, global_accuracy], feed_dict={'top/input:0': x3[-1], 'top/output:0': y})
 
   # ( V ^__^) V   training complete   V (^__^ V )

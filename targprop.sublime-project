@@ -11,29 +11,7 @@
 	"folders":
 	[
 		{
-			"file_exclude_patterns":
-			[
-				"*.aux",
-				"*.fls",
-				"*.fdb_latexmk",
-				"*.log",
-				"*.out",
-				"*.pdf",
-				"*.gz",
-				"*.bbl",
-				"*.blg",
-				"*.mat",
-				"*.ipynb"
-			],
-			"folder_exclude_patterns":
-			[
-				".ipynb_checkpoints",
-				"saves"
-			],
-			"path": "."
-		},
-		{
-			"path": "/Users/jeff/Documents/Python/_projects/tdadl"
+			"path": "/Users/jeff/Documents/Python/_projects/tensorflow-target-prop/"
 		}
 	]
 }
